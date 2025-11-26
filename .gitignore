@@ -1,0 +1,125 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# PyTorch & ML Models
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+*.pb
+*.onnx
+*.tflite
+models/
+checkpoints/
+runs/
+wandb/
+mlruns/
+.neptune/
+
+# Hugging Face
+.cache/
+transformers_cache/
+hf_cache/
+
+# Processed Datasets
+data/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.cursorrules
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.tmp
+*.temp
+
+# Logs
+*.log
+logs/
+*.out
+*.err
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+*.cover
+.cache
+nosetests.xml
+coverage.xml
+*.coveragerc
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
+
+# Weights & Biases / Other Experiment Trackers
+wandb/
+tensorboard_logs/
+lightning_logs/
+
+# Data Processing Artifacts
+*.pickle
+*.pkl
+*.joblib
+processed_data/
+intermediate_data/
+
