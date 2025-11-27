@@ -1,0 +1,6 @@
+pandas
+pyyaml
+torch
+transformers
+wandb
+
