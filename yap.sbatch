@@ -19,4 +19,4 @@ conda activate yap
 # run script
 export PYTHONUNBUFFERED=1
 python3 -u train.py \
-  --config configs/magrpo_config.yaml
+  --config configs/config.yaml

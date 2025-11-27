@@ -6,7 +6,7 @@ model:
     trust_remote_code: true
   model_kwargs:
     trust_remote_code: true
-    torch_dtype: "bfloat16"
+    dtype: "bfloat16"
 
 dataset:
   path: "data/conversations.json"

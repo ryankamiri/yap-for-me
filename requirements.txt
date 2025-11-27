@@ -3,4 +3,6 @@ pyyaml
 torch
 transformers
 wandb
+sentencepiece
+sympy
 

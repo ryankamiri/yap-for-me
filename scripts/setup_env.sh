@@ -24,8 +24,8 @@ echo "Activating environment: $ENV_NAME"
 eval "$(conda shell.bash hook)"
 conda activate "$ENV_NAME"
 
-echo "Installing PyTorch with CUDA support via conda..."
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y
+echo "Installing PyTorch with CUDA support via pip..."
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 echo "Installing other dependencies from requirements.txt..."
 pip install -r requirements.txt
