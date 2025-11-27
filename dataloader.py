@@ -7,13 +7,20 @@ from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
 
 
+def format_message_prefix(timestamp: str, speaker: str, replying_to: str = None) -> str:
+    """Format just the prefix part of a message (everything except the text).
+    Returns: [timestamp] speaker: [replying_to ] (without the actual text)
+    """
+    if replying_to:
+        return f"[{timestamp}] {speaker}: {replying_to} "
+    return f"[{timestamp}] {speaker}: "
+
+
 def format_message(timestamp: str, speaker: str, text: str, replying_to: str = None) -> str:
     """Format a message into the standard format: [timestamp] Speaker: text
     If replying_to is provided, it's included before the text.
     """
-    if replying_to:
-        return f"[{timestamp}] {speaker}: {replying_to} {text}"
-    return f"[{timestamp}] {speaker}: {text}"
+    return format_message_prefix(timestamp, speaker, replying_to) + text
 
 
 def has_incoming_context(messages: List[Dict], current_idx: int) -> bool:
@@ -69,43 +76,50 @@ def build_training_examples_from_conversations(
                 )
                 for msg in context_messages
             ]
-            target_text = format_message(
+            
+            # For target message, separate prefix from text
+            target_prefix = format_message_prefix(
                 target_message['timestamp'],
                 target_message['speaker'],
-                target_message['text'],
                 target_message['replying_to']
             )
+            target_text_only = target_message['text']
             
             context_text = '\n'.join(context_texts)
             
             context_tokens = tokenizer.encode(context_text, add_special_tokens=False)
-            target_tokens = tokenizer.encode(target_text, add_special_tokens=False)
+            prefix_tokens = tokenizer.encode(target_prefix, add_special_tokens=False)
+            text_tokens = tokenizer.encode(target_text_only, add_special_tokens=False)
+            
+            # Calculate total target length (prefix + text)
+            target_total_length = len(prefix_tokens) + len(text_tokens)
             
             # Truncate context tokens if they are too long
-            if len(context_tokens) > max_length - len(target_tokens):
-                available_context = max_length - len(target_tokens)
+            if len(context_tokens) > max_length - target_total_length:
+                available_context = max_length - target_total_length
                 if available_context <= 0:
                     continue
                 context_tokens = context_tokens[-available_context:]
             
             # Handle case where context + target exceeds max_length
-            # This can happen if the target message itself is very long
-            # We truncate the target to fit, but skip if there's no room for any target tokens
-            total_length = len(context_tokens) + len(target_tokens)
+            # We truncate the text portion if needed, but keep the prefix
+            total_length = len(context_tokens) + len(prefix_tokens) + len(text_tokens)
             if total_length > max_length:
-                available_for_target = max_length - len(context_tokens)
-                if available_for_target <= 0:
+                available_for_text = max_length - len(context_tokens) - len(prefix_tokens)
+                if available_for_text <= 0:
                     continue
-                target_tokens = target_tokens[:available_for_target]
+                text_tokens = text_tokens[:available_for_text]
             
-            input_ids = context_tokens + target_tokens
-            labels = [-100] * len(context_tokens) + target_tokens
+            # Combine: context + prefix + text
+            input_ids = context_tokens + prefix_tokens + text_tokens
+            # Labels: -100 for context and prefix (not predicted), normal labels for text only
+            labels = [-100] * len(context_tokens) + [-100] * len(prefix_tokens) + text_tokens
             
             examples.append({
                 'input_ids': input_ids,
                 'labels': labels,
                 'context_length': len(context_tokens),
-                'target_length': len(target_tokens)
+                'target_length': len(prefix_tokens) + len(text_tokens)
             })
     
     return examples
