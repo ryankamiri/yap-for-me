@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import List, Dict, Tuple
 import random
 
@@ -241,58 +242,78 @@ def load_conversations(json_path: str) -> List[Dict]:
     return conversations
 
 
+def load_tokenized_examples(torch_path: str) -> List[Dict]:
+    """Load pre-tokenized examples from torch file.
+    
+    Args:
+        torch_path: Path to .pt file with tokenized examples (saved with torch.save)
+        
+    Returns:
+        List of training examples with 'input_ids' and 'labels'
+        
+    Raises:
+        FileNotFoundError: If the tokenized examples file doesn't exist
+    """
+    path = Path(torch_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Tokenized examples file not found: {torch_path}\n"
+            f"Please run preprocess_dataset.py first to create the tokenized examples."
+        )
+    
+    examples = torch.load(torch_path, map_location='cpu')
+    return examples
+
+
 def create_datasets(
-    conversations_json_path: str,
+    tokenized_examples_path: str,
     tokenizer: PreTrainedTokenizer,
     max_length: int = 2048,
     train_split: float = 0.8,
     val_split: float = 0.1,
     test_split: float = 0.1,
     random_seed: int = 42,
-    outgoing_speaker_name: str = "Ryan Amiri",
     padding_side: str = "left"
 ) -> Tuple[ConversationDataset, ConversationDataset, ConversationDataset]:
-    """Create train/val/test datasets from conversations JSON.
+    """Create train/val/test datasets from pre-tokenized examples.
     
     Args:
-        conversations_json_path: Path to conversations.json
+        tokenized_examples_path: Path to .pt file with pre-tokenized examples
         tokenizer: Hugging Face tokenizer
         max_length: Maximum sequence length
         train_split: Fraction for training
         val_split: Fraction for validation
         test_split: Fraction for test
         random_seed: Random seed for splitting
-        outgoing_speaker_name: Name for outgoing messages
+        padding_side: "left" or "right" - where to pad sequences
         
     Returns:
         Tuple of (train_dataset, val_dataset, test_dataset)
+        
+    Raises:
+        FileNotFoundError: If the tokenized examples file doesn't exist
     """
-    conversations = load_conversations(conversations_json_path)
+    if abs(train_split + val_split + test_split - 1.0) > 1e-6:
+        raise ValueError("Splits must sum to 1.0")
     
-    train_convos, val_convos, test_convos = split_conversations(
-        conversations,
-        train_split=train_split,
-        val_split=val_split,
-        test_split=test_split,
-        random_seed=random_seed
-    )
+    print(f"Loading pre-tokenized examples from: {tokenized_examples_path}")
+    all_examples = load_tokenized_examples(tokenized_examples_path)
+    print(f"Loaded {len(all_examples)} examples")
     
-    print(f"Loaded {len(conversations):,} conversations")
-    print(f"Train: {len(train_convos):,}, Val: {len(val_convos):,}, Test: {len(test_convos):,}")
+    # Shuffle examples and split
+    random.seed(random_seed)
+    shuffled = all_examples.copy()
+    random.shuffle(shuffled)
     
-    train_examples = build_training_examples_from_conversations(
-        train_convos, tokenizer, max_length, outgoing_speaker_name
-    )
-    val_examples = build_training_examples_from_conversations(
-        val_convos, tokenizer, max_length, outgoing_speaker_name
-    )
-    test_examples = build_training_examples_from_conversations(
-        test_convos, tokenizer, max_length, outgoing_speaker_name
-    )
+    total = len(shuffled)
+    train_end = int(total * train_split)
+    val_end = train_end + int(total * val_split)
     
-    print(f"Training examples: {len(train_examples):,}")
-    print(f"Validation examples: {len(val_examples):,}")
-    print(f"Test examples: {len(test_examples):,}")
+    train_examples = shuffled[:train_end]
+    val_examples = shuffled[train_end:val_end]
+    test_examples = shuffled[val_end:]
+    
+    print(f"Train: {len(train_examples):,}, Val: {len(val_examples):,}, Test: {len(test_examples):,}")
     
     train_dataset = ConversationDataset(train_examples, tokenizer, max_length, padding_side)
     val_dataset = ConversationDataset(val_examples, tokenizer, max_length, padding_side)

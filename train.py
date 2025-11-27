@@ -25,8 +25,7 @@ def main():
     
     model_name = config.get("model.name")
     max_length = config.get("model.max_length")
-    conversations_path = config.get("dataset.path")
-    outgoing_speaker_name = config.get("dataset.outgoing_speaker_name")
+    tokenized_examples_path = config.get("dataset.tokenized_examples_path")
     padding_side = config.get("dataset.padding_side")
     random_seed = config.get("dataset.random_seed")
 
@@ -55,16 +54,15 @@ def main():
     )
     model.to(device)
     
-    print(f"Loading conversations from: {conversations_path}")
+    print(f"Loading pre-tokenized examples from: {tokenized_examples_path}")
     train_dataset, val_dataset, _ = create_datasets(
-        conversations_json_path=conversations_path,
+        tokenized_examples_path=tokenized_examples_path,
         tokenizer=tokenizer,
         max_length=max_length,
         train_split=config.get("dataset.train_split"),
         val_split=config.get("dataset.val_split"),
         test_split=config.get("dataset.test_split"),
         random_seed=random_seed,
-        outgoing_speaker_name=outgoing_speaker_name,
         padding_side=padding_side
     )
     
