@@ -14,7 +14,7 @@ cd $SLURM_SUBMIT_DIR    # ensure we start where sbatch was called
 # load env
 source ~/.bashrc
 eval "$(conda shell.bash hook)"
-conda activate comlrl
+conda activate yap
 
 # run script
 export PYTHONUNBUFFERED=1
