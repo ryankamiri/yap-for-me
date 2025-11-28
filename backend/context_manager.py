@@ -179,6 +179,20 @@ class ContextManager:
                 return msg
         return None
     
+    def _find_message_in_context(self, messages: List[Message], guid: str) -> Optional[Message]:
+        """Find a message in the context by its GUID."""
+        for msg in messages:
+            if msg.message_guid == guid:
+                return msg
+        return None
+    
+    def _format_replying_to_from_message(self, message: Message) -> str:
+        """Format a Message object into the replying_to format.
+        
+        Format: "➜ Replying to {speaker}, {timestamp}: « {text} »"
+        """
+        return f"➜ Replying to {message.speaker}, {message.timestamp}: « {message.text} »"
+    
     def populate_from_bluebubbles_messages(
         self,
         chat_guid: str,
@@ -195,7 +209,7 @@ class ContextManager:
             message_guid = msg_data.get("guid", "")
             date_created = msg_data.get("dateCreated", "")
             is_from_me = msg_data.get("isFromMe", False)
-            reply_to_guid = msg_data.get("replyToGuid") or msg_data.get("threadOriginatorGuid")
+            reply_to_guid = msg_data.get("threadOriginatorGuid")
             
             handle = msg_data.get("handle", {})
             if is_from_me:
@@ -212,6 +226,13 @@ class ContextManager:
                 replied_to_msg = self._find_message_by_guid(bluebubbles_messages, reply_to_guid)
                 if replied_to_msg:
                     replying_to_formatted = self._format_replying_to(replied_to_msg)
+                else:
+                    existing_messages = self.contexts.get(chat_guid, [])
+                    existing_msg = self._find_message_in_context(existing_messages, reply_to_guid)
+                    if existing_msg:
+                        replying_to_formatted = self._format_replying_to_from_message(existing_msg)
+                    else:
+                        replying_to_formatted = "➜ Replying to Unknown: « (text unknown) »"
             
             message = Message(
                 timestamp=timestamp,

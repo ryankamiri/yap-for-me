@@ -112,7 +112,6 @@ class MessageEvent(BaseModel):
 
 async def _process_message(
     chat_guid: str,
-    replying_to: Optional[str],
     context_manager: ContextManager,
     model_client: ModelClient,
     bluebubbles_client: BlueBubblesClient,
@@ -220,7 +219,6 @@ async def handle_message_webhook(
             chat_guid,
             _process_message,
             chat_guid=chat_guid,
-            replying_to=replying_to,
             context_manager=context_manager,
             model_client=model_client,
             bluebubbles_client=bluebubbles_client,

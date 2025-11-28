@@ -14,10 +14,13 @@ This project is currently in development. The core components are implemented, b
 
 - Preprocesses iMessage CSV exports from iMazing 📱
 - Filters and cleans conversation data 🧹
+- Converts messages to code-style tool calls (react, reply, send_message) 🛠️
+- Groups consecutive actions into multi-action training examples 🔗
 - Tokenizes conversations for efficient training ⚡
 - Fine-tunes language models using PyTorch 🚀
 - Supports training on HPC clusters with SLURM 🖥️
 - Tracks training metrics with Weights & Biases 📊
+- Backend parses and executes tool calls via BlueBubbles API 🔄
 
 ## Setup
 
@@ -104,10 +107,15 @@ Key configuration options in `training/configs/config.yaml`:
 
 ## Training Details
 
-- **Objective**: Next-token prediction on your outgoing messages 🎯
-- **Context**: Uses previous conversation history as context 💬
-- **Format**: Only predicts message text (not timestamps, speakers, or reply metadata) ✍️
-- **Loss**: Cross-entropy loss on target tokens only 📉
+- **Objective**: Next-token prediction on tool calls for your outgoing messages 🎯
+- **Context**: Uses previous conversation history as context (with GUIDs for message references) 💬
+- **Format**: Predicts code-style tool calls (e.g., `react(message_guid="...", reaction_type="love")`) 🛠️
+- **Multi-Action**: Groups consecutive outgoing messages into single training examples (multiple tool calls) 🔗
+- **Loss**: Cross-entropy loss on target tool call tokens only 📉
+- **Tool Types**: 
+  - `send_message(text="...")` - Regular messages
+  - `reply(message_guid="...", text="...")` - Replies to specific messages
+  - `react(message_guid="...", reaction_type="...")` - Reactions (love, like, dislike, laugh, emphasize, question)
 
 ## Data Processing
 
@@ -120,11 +128,18 @@ The preprocessing pipeline:
    - Outgoing messages with excluded words
    - Outgoing messages with attachments
    - Conversations with no outgoing messages
+   - Failed tool call conversions (reactions/replies where target message not found)
 3. Groups messages by chat session 👥
 4. Sorts messages chronologically ⏰
-5. Creates training examples where:
-   - Context: Previous messages in the conversation
-   - Target: Your next outgoing message (text only)
+5. Converts outgoing messages to tool calls:
+   - Generates stable GUIDs for all messages
+   - Detects reactions (Loved, Liked, Disliked, etc.) and converts to `react()` calls
+   - Detects replies (from `replying_to` field) and converts to `reply()` calls
+   - Regular messages become `send_message()` calls
+6. Groups consecutive outgoing messages into multi-action examples
+7. Creates training examples where:
+   - Context: Previous messages in the conversation (with GUIDs, formatted replying_to strings)
+   - Target: Tool calls (code-style format) for your outgoing messages
 
 ## Dependencies
 
@@ -136,8 +151,11 @@ See `requirements.txt` for Python dependencies. Key packages:
 
 ## Notes
 
-- The model only learns to generate the text content of messages, not metadata 📝
-- Reply information is included in context but not predicted 🔗
+- The model learns to generate tool calls, not raw message text 🛠️
+- Messages in context include GUIDs so the model can reference them in tool calls 🔗
+- Reply information in context is formatted as `"➜ Replying to {speaker}, {timestamp}: « {text} »"` to match training format 📝
+- Multiple consecutive outgoing messages are grouped into single training examples (multi-action) 🔗
+- Failed conversions (reactions/replies where target message not found) are filtered out ❌
 - Training examples are split randomly (not by conversation) since they're independent once tokenized 🎲
 
 ## Backend
@@ -153,10 +171,14 @@ The backend is a FastAPI server that integrates with BlueBubbles (local iMessage
 ### Flow
 
 1. BlueBubbles webhook receives a new incoming message
-2. Backend fetches conversation history (if not cached) and populates context window
-3. Model inference is performed with conversation context
-4. **TEMPORARY**: Model output is sent as plain text to the sender
-5. **TODO**: Replace with proper tool calling extraction to parse and execute structured actions
+2. Backend adds message to context (formats replies to match training format)
+3. Backend fetches conversation history (if not cached) and populates context window
+4. Model inference is performed with conversation context
+5. Model outputs code-style tool calls (e.g., `react(message_guid="...", reaction_type="love")`)
+6. Backend parses tool calls and executes actions via BlueBubbles API:
+   - `send_message()` - Sends a text message
+   - `reply()` - Replies to a specific message
+   - `react()` - Adds a reaction to a message
 
 ### Configuration
 
@@ -171,14 +193,25 @@ cd backend
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-### Important Notes
+### Tool Calling
 
-⚠️ **Temporary Solution**: Currently, the model output is sent directly as text to the sender. This is a temporary implementation that needs to be replaced with efficient tool calling extraction. The model should output structured actions (send, reply, react, etc.) that are then parsed and executed appropriately.
+The model outputs code-style tool calls that are parsed and executed:
+
+**Format**: `action_name(param="value", ...)`
+
+**Supported Actions**:
+- `send_message(text="Your message here")`
+- `reply(message_guid="ABC123", text="Your reply here")`
+- `react(message_guid="ABC123", reaction_type="love")` (types: love, like, dislike, laugh, emphasize, question)
+
+**Multiple Actions**: The model can output multiple tool calls on separate lines, which are executed sequentially.
+
+**Context Format**: Messages include GUIDs (e.g., `[guid:ABC123]`) so the model can reference specific messages in tool calls. Reply information is formatted to match training data format.
 
 ## Future Work
 
 - Model evaluation and generation testing 🧪
 - Integration with phone/texting interface 📲
-- **Tool calling extraction and execution** (replaces temporary text sending) 🛠️
 - Additional filtering and data quality improvements ✨
+- Improved reaction/reply target matching algorithms 🎯
 
