@@ -15,7 +15,6 @@ dataset:
   val_split: 0.1
   test_split: 0.1
   random_seed: 42
-  outgoing_speaker_name: "Ryan Amiri"
   padding_side: "left"
 
 training:

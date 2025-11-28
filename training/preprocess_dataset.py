@@ -24,7 +24,6 @@ def main():
     model_name = config.get("model.name")
     max_length = config.get("model.max_length")
     conversations_path = config.get("dataset.path")
-    outgoing_speaker_name = config.get("dataset.outgoing_speaker_name")
     tokenized_examples_path = config.get("dataset.tokenized_examples_path")
     
     num_workers = args.num_workers if args.num_workers else mp.cpu_count()
@@ -46,7 +45,7 @@ def main():
     
     # Process conversations in parallel
     all_examples = []
-    with mp.Pool(processes=num_workers, initializer=init_worker, initargs=(model_name, config.get("model.tokenizer_kwargs", {}), max_length, outgoing_speaker_name)) as pool:
+    with mp.Pool(processes=num_workers, initializer=init_worker, initargs=(model_name, config.get("model.tokenizer_kwargs", {}), max_length)) as pool:
         results = pool.imap(process_conversation_worker, enumerate(conversations))
         
         for idx, conv_examples in enumerate(results):
@@ -70,17 +69,15 @@ def main():
 # Global tokenizer for worker processes
 _worker_tokenizer = None
 _worker_max_length = None
-_worker_outgoing_speaker_name = None
 
 
-def init_worker(model_name, tokenizer_kwargs, max_length, outgoing_speaker_name):
+def init_worker(model_name, tokenizer_kwargs, max_length):
     """Initialize worker process with tokenizer and parameters."""
-    global _worker_tokenizer, _worker_max_length, _worker_outgoing_speaker_name
+    global _worker_tokenizer, _worker_max_length
     _worker_tokenizer = AutoTokenizer.from_pretrained(model_name, **tokenizer_kwargs)
     if _worker_tokenizer.pad_token is None:
         _worker_tokenizer.pad_token = _worker_tokenizer.eos_token
     _worker_max_length = max_length
-    _worker_outgoing_speaker_name = outgoing_speaker_name
 
 
 def process_conversation_worker(args):
@@ -91,8 +88,7 @@ def process_conversation_worker(args):
     conv_examples = build_training_examples_from_conversations(
         [conversation],
         _worker_tokenizer,
-        max_length=_worker_max_length,
-        outgoing_speaker_name=_worker_outgoing_speaker_name
+        max_length=_worker_max_length
     )
     
     # Add conversation metadata to each example
