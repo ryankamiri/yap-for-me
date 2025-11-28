@@ -109,14 +109,6 @@ def build_training_examples_from_conversations(
                     )
                 )
             
-            first_outgoing_msg = messages[first_outgoing_idx]
-            target_prefix = format_message_prefix(
-                first_outgoing_msg['timestamp'],
-                first_outgoing_msg['speaker'],
-                first_outgoing_msg['replying_to'],
-                first_outgoing_msg['guid']
-            )
-            
             tool_calls = []
             for msg_idx in group:
                 msg = messages[msg_idx]
@@ -132,37 +124,32 @@ def build_training_examples_from_conversations(
             context_text = '\n'.join(context_texts)
             
             context_tokens = tokenizer.encode(context_text, add_special_tokens=False)
-            prefix_tokens = tokenizer.encode(target_prefix, add_special_tokens=False)
             tool_call_tokens = tokenizer.encode(target_tool_calls_text, add_special_tokens=False)
             
-            # Calculate total target length (prefix + text)
-            target_total_length = len(prefix_tokens) + len(tool_call_tokens)
-            
             # Truncate context tokens if they are too long
-            if len(context_tokens) > max_length - target_total_length:
-                available_context = max_length - target_total_length
+            if len(context_tokens) > max_length - len(tool_call_tokens):
+                available_context = max_length - len(tool_call_tokens)
                 if available_context <= 0:
                     continue
                 context_tokens = context_tokens[-available_context:]
             
             # Handle case where context + target exceeds max_length
-            # We truncate the text portion if needed, but keep the prefix
-            total_length = len(context_tokens) + len(prefix_tokens) + len(tool_call_tokens)
+            total_length = len(context_tokens) + len(tool_call_tokens)
             if total_length > max_length:
-                available_for_tool_calls = max_length - len(context_tokens) - len(prefix_tokens)
+                available_for_tool_calls = max_length - len(context_tokens)
                 if available_for_tool_calls <= 0:
                     continue
                 tool_call_tokens = tool_call_tokens[:available_for_tool_calls]
             
-            # Labels: -100 for context and prefix (not predicted), normal labels for text only
-            input_ids = context_tokens + prefix_tokens + tool_call_tokens
-            labels = [-100] * len(context_tokens) + [-100] * len(prefix_tokens) + tool_call_tokens
+            # Labels: -100 for context (not predicted), normal labels for tool calls only
+            input_ids = context_tokens + tool_call_tokens
+            labels = [-100] * len(context_tokens) + tool_call_tokens
             
             examples.append({
                 'input_ids': input_ids,
                 'labels': labels,
                 'context_length': len(context_tokens),
-                'target_length': len(prefix_tokens) + len(tool_call_tokens)
+                'target_length': len(tool_call_tokens)
             })
     
     return examples

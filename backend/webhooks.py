@@ -126,9 +126,7 @@ async def _process_message(
             logger.warning(f"No context available for chat {chat_guid}, skipping processing")
             return
         
-        response_prefix = context_manager.format_response_prefix(chat_guid, replying_to=replying_to)
-        
-        full_prompt = f"{context}\n{response_prefix}"
+        full_prompt = context
         
         model_output = await model_client.infer(full_prompt)
         
