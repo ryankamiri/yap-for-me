@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Tuple
 import random
+import uuid
 
 import torch
 from torch.utils.data import Dataset
@@ -71,7 +72,7 @@ def build_training_examples_from_conversations(
             
             context_texts = []
             for msg_idx_inner, msg in enumerate(context_messages):
-                fake_guid = f"msg-{msg_idx_inner:03d}"
+                fake_guid = str(uuid.uuid4()).upper()
                 context_texts.append(
                     format_message(
                         msg['timestamp'],
@@ -82,7 +83,7 @@ def build_training_examples_from_conversations(
                     )
                 )
             
-            fake_target_guid = f"msg-{msg_idx:03d}"
+            fake_target_guid = str(uuid.uuid4()).upper()
             target_prefix = format_message_prefix(
                 target_message['timestamp'],
                 target_message['speaker'],

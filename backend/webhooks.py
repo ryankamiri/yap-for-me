@@ -121,7 +121,9 @@ async def handle_message_webhook(
         current_message = messages[-1]
         new_message_text = context_manager.format_message(current_message)
         
-        model_output = await model_client.infer(context, new_message_text)
+        response_prefix = context_manager.format_response_prefix(chat_guid, replying_to=replying_to)
+        
+        model_output = await model_client.infer(context, new_message_text, response_prefix)
         
         logger.info(f"Model output for chat {chat_guid}: {model_output}")
         

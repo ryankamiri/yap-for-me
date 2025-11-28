@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
 from datetime import datetime
+import uuid
 from .config import BackendConfig
 
 
@@ -66,6 +67,24 @@ class ContextManager:
         if message.replying_to:
             return f"{guid_part}[{message.timestamp}] {message.speaker}: {message.replying_to} {message.text}"
         return f"{guid_part}[{message.timestamp}] {message.speaker}: {message.text}"
+    
+    def format_response_prefix(self, chat_guid: str, replying_to: Optional[str] = None) -> str:
+        """Format the prefix for Ryan's response (everything except the text).
+        
+        This matches the training format where the model sees:
+        [guid:xxx][timestamp] Ryan Amiri: [replying_to ]
+        and then generates the text.
+        
+        Generates a synthetic UUID GUID for the response message (since it doesn't exist yet).
+        """
+        synthetic_guid = str(uuid.uuid4()).upper()
+        
+        guid_part = f"[guid:{synthetic_guid}]"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        if replying_to:
+            return f"{guid_part}[{timestamp}] {self.outgoing_speaker_name}: {replying_to} "
+        return f"{guid_part}[{timestamp}] {self.outgoing_speaker_name}: "
     
     def format_context(self, messages: List[Message]) -> str:
         return "\n".join([self.format_message(msg) for msg in messages])
