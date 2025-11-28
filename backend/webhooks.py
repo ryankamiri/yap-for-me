@@ -6,6 +6,7 @@ import logging
 from .context_manager import ContextManager
 from .model_client import ModelClient
 from .bluebubbles_client import BlueBubblesClient
+from .debounce_manager import DebounceManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,10 @@ def get_bluebubbles_client(request: Request) -> BlueBubblesClient:
     return request.app.state.bluebubbles_client
 
 
+def get_debounce_manager(request: Request) -> DebounceManager:
+    return request.app.state.debounce_manager
+
+
 class MessageEvent(BaseModel):
     chat_guid: str
     message_guid: str
@@ -35,12 +40,51 @@ class MessageEvent(BaseModel):
     replying_to: Optional[str] = None
 
 
+async def _process_message(
+    chat_guid: str,
+    replying_to: Optional[str],
+    context_manager: ContextManager,
+    model_client: ModelClient,
+    bluebubbles_client: BlueBubblesClient
+) -> None:
+    """Process a message after debounce period."""
+    try:
+        context = await context_manager.get_context_or_fetch(chat_guid, bluebubbles_client)
+        
+        if not context:
+            logger.warning(f"No context available for chat {chat_guid}, skipping processing")
+            return
+        
+        response_prefix = context_manager.format_response_prefix(chat_guid, replying_to=replying_to)
+        
+        full_prompt = f"{context}\n{response_prefix}"
+        
+        model_output = await model_client.infer(full_prompt)
+        
+        logger.info(f"Model output for chat {chat_guid}: {model_output}")
+        
+        # TODO: TEMPORARY SOLUTION - Replace with proper tool calling extraction
+        # Currently, we just send the raw model output as text. This needs to be replaced
+        # with efficient tool calling extraction that parses the model output to extract
+        # structured actions (send, reply, react, etc.) and executes them appropriately.
+        if model_output.strip():
+            try:
+                await bluebubbles_client.send_message(chat_guid, model_output.strip())
+                logger.info(f"Sent model output to chat {chat_guid}")
+            except Exception as e:
+                logger.error(f"Failed to send message to chat {chat_guid}: {str(e)}")
+    
+    except Exception as e:
+        logger.error(f"Error in debounced message processing: {str(e)}", exc_info=True)
+
+
 @router.post("/webhook/message")
 async def handle_message_webhook(
     request: Request,
     context_manager: ContextManager = Depends(get_context_manager),
     model_client: ModelClient = Depends(get_model_client),
-    bluebubbles_client: BlueBubblesClient = Depends(get_bluebubbles_client)
+    bluebubbles_client: BlueBubblesClient = Depends(get_bluebubbles_client),
+    debounce_manager: DebounceManager = Depends(get_debounce_manager)
 ):
     try:
         data = await request.json()
@@ -82,31 +126,6 @@ async def handle_message_webhook(
             logger.warning(f"Missing required fields: chat_guid={chat_guid}, message_guid={message_guid}")
             return {"status": "error", "reason": "Missing chat_guid or message_guid"}
         
-        context = context_manager.get_context(chat_guid)
-        
-        if not context:
-            logger.info(f"Chat {chat_guid} not cached, fetching recent messages from BlueBubbles")
-            try:
-                offset = 0
-                limit = 100
-                needs_more = True
-                
-                while needs_more:
-                    messages = await bluebubbles_client.get_chat_messages(chat_guid, limit=limit, offset=offset)
-                    if not messages:
-                        break
-                    
-                    needs_more = context_manager.populate_from_bluebubbles_messages(chat_guid, messages)
-                    offset += len(messages)
-                    
-                    if len(messages) < limit:
-                        break
-                
-                context = context_manager.get_context(chat_guid)
-                logger.info(f"Populated context for chat {chat_guid} with messages up to offset {offset}")
-            except Exception as e:
-                logger.warning(f"Failed to fetch messages from BlueBubbles for chat {chat_guid}: {str(e)}")
-        
         message_data_dict = {
             "timestamp": timestamp,
             "speaker": sender_name,
@@ -117,32 +136,20 @@ async def handle_message_webhook(
         
         context_manager.add_message(chat_guid, message_data_dict)
         
-        messages = context_manager.get_messages(chat_guid)
-        current_message = messages[-1]
-        new_message_text = context_manager.format_message(current_message)
-        
-        response_prefix = context_manager.format_response_prefix(chat_guid, replying_to=replying_to)
-        
-        model_output = await model_client.infer(context, new_message_text, response_prefix)
-        
-        logger.info(f"Model output for chat {chat_guid}: {model_output}")
-        
-        # TODO: TEMPORARY SOLUTION - Replace with proper tool calling extraction
-        # Currently, we just send the raw model output as text. This needs to be replaced
-        # with efficient tool calling extraction that parses the model output to extract
-        # structured actions (send, reply, react, etc.) and executes them appropriately.
-        if model_output.strip():
-            try:
-                await bluebubbles_client.send_message(chat_guid, model_output.strip())
-                logger.info(f"Sent model output to chat {chat_guid}")
-            except Exception as e:
-                logger.error(f"Failed to send message to chat {chat_guid}: {str(e)}")
+        await debounce_manager.debounce(
+            chat_guid,
+            _process_message,
+            chat_guid=chat_guid,
+            replying_to=replying_to,
+            context_manager=context_manager,
+            model_client=model_client,
+            bluebubbles_client=bluebubbles_client
+        )
         
         return {
-            "status": "processed",
+            "status": "queued",
             "chat_guid": chat_guid,
-            "message_guid": message_guid,
-            "model_output": model_output
+            "message_guid": message_guid
         }
     
     except Exception as e:

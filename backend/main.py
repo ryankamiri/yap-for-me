@@ -8,6 +8,7 @@ from .bluebubbles_client import BlueBubblesClient
 from .context_manager import ContextManager
 from .model_client import ModelClient
 from .actions import ActionExecutor
+from .debounce_manager import DebounceManager
 from .webhooks import router as webhook_router
 
 logging.basicConfig(
@@ -24,11 +25,16 @@ context_manager = ContextManager(config)
 model_client = ModelClient(config)
 action_executor = ActionExecutor(bluebubbles_client)
 
+inference_config = config.get_inference_config()
+debounce_seconds = inference_config.get("debounce_seconds")
+debounce_manager = DebounceManager(debounce_seconds=debounce_seconds)
+
 app.state.config = config
 app.state.bluebubbles_client = bluebubbles_client
 app.state.context_manager = context_manager
 app.state.model_client = model_client
 app.state.action_executor = action_executor
+app.state.debounce_manager = debounce_manager
 
 def get_context_manager_dep(request: Request) -> ContextManager:
     return request.app.state.context_manager

@@ -133,15 +133,17 @@ class ModelClient:
     
     async def infer(
         self,
-        context: str,
-        new_message: str,
-        response_prefix: str = "",
+        full_prompt: str,
         config: Optional[Dict[str, Any]] = None
     ) -> str:
+        """Run inference with the full prompt.
+        
+        Args:
+            full_prompt: Complete prompt including context, messages, and response prefix
+            config: Optional model config override
+        """
         if config is None:
             config = self.config.get_model_config()
-        
-        full_prompt = f"{context}\n{new_message}\n{response_prefix}"
         
         try:
             if self.server_type == "vllm":

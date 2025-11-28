@@ -1,7 +1,11 @@
 from typing import Dict, List, Optional
 from datetime import datetime
 import uuid
+import logging
 from .config import BackendConfig
+from .bluebubbles_client import BlueBubblesClient
+
+logger = logging.getLogger(__name__)
 
 
 class Message:
@@ -116,6 +120,49 @@ class ContextManager:
             return ""
         
         return self.format_context(messages)
+    
+    async def get_context_or_fetch(
+        self,
+        chat_guid: str,
+        bluebubbles_client: BlueBubblesClient
+    ) -> str:
+        """Get context for a chat, fetching from BlueBubbles if not cached.
+        
+        Args:
+            chat_guid: Chat identifier
+            bluebubbles_client: BlueBubbles client to fetch messages if needed
+            
+        Returns:
+            Formatted context string, empty if no messages available
+        """
+        context = self.get_context(chat_guid)
+        
+        if context:
+            return context
+        
+        logger.info(f"Chat {chat_guid} not cached, fetching recent messages from BlueBubbles")
+        try:
+            offset = 0
+            limit = 100
+            needs_more = True
+            
+            while needs_more:
+                messages = await bluebubbles_client.get_chat_messages(chat_guid, limit=limit, offset=offset)
+                if not messages:
+                    break
+                
+                needs_more = self.populate_from_bluebubbles_messages(chat_guid, messages)
+                offset += len(messages)
+                
+                if len(messages) < limit:
+                    break
+            
+            context = self.get_context(chat_guid)
+            logger.info(f"Populated context for chat {chat_guid} with messages up to offset {offset}")
+            return context
+        except Exception as e:
+            logger.warning(f"Failed to fetch messages from BlueBubbles for chat {chat_guid}: {str(e)}")
+            return ""
     
     def clear_context(self, chat_guid: str) -> None:
         if chat_guid in self.contexts:
