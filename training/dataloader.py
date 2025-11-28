@@ -8,20 +8,21 @@ from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
 
 
-def format_message_prefix(timestamp: str, speaker: str, replying_to: str = None) -> str:
+def format_message_prefix(timestamp: str, speaker: str, replying_to: str = None, guid: str = None) -> str:
     """Format just the prefix part of a message (everything except the text).
-    Returns: [timestamp] speaker: [replying_to ] (without the actual text)
+    Returns: [guid:xxx][timestamp] speaker: [replying_to ] (without the actual text)
     """
+    guid_part = f"[guid:{guid}]" if guid else ""
     if replying_to:
-        return f"[{timestamp}] {speaker}: {replying_to} "
-    return f"[{timestamp}] {speaker}: "
+        return f"{guid_part}[{timestamp}] {speaker}: {replying_to} "
+    return f"{guid_part}[{timestamp}] {speaker}: "
 
 
-def format_message(timestamp: str, speaker: str, text: str, replying_to: str = None) -> str:
-    """Format a message into the standard format: [timestamp] Speaker: text
+def format_message(timestamp: str, speaker: str, text: str, replying_to: str = None, guid: str = None) -> str:
+    """Format a message into the standard format: [guid:xxx][timestamp] Speaker: text
     If replying_to is provided, it's included before the text.
     """
-    return format_message_prefix(timestamp, speaker, replying_to) + text
+    return format_message_prefix(timestamp, speaker, replying_to, guid) + text
 
 
 def has_incoming_context(messages: List[Dict], current_idx: int) -> bool:
@@ -68,21 +69,25 @@ def build_training_examples_from_conversations(
             
             context_messages = messages[:msg_idx]
             
-            context_texts = [
-                format_message(
-                    msg['timestamp'],
-                    msg['speaker'],
-                    msg['text'],
-                    msg['replying_to']
+            context_texts = []
+            for msg_idx_inner, msg in enumerate(context_messages):
+                fake_guid = f"msg-{msg_idx_inner:03d}"
+                context_texts.append(
+                    format_message(
+                        msg['timestamp'],
+                        msg['speaker'],
+                        msg['text'],
+                        msg['replying_to'],
+                        fake_guid
+                    )
                 )
-                for msg in context_messages
-            ]
             
-            # For target message, separate prefix from text
+            fake_target_guid = f"msg-{msg_idx:03d}"
             target_prefix = format_message_prefix(
                 target_message['timestamp'],
                 target_message['speaker'],
-                target_message['replying_to']
+                target_message['replying_to'],
+                fake_target_guid
             )
             target_text_only = target_message['text']
             

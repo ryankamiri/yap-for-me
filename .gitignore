@@ -90,6 +90,7 @@ logs/
 .env.local
 .env.*.local
 *.env
+!.env.example
 
 # Testing
 .pytest_cache/

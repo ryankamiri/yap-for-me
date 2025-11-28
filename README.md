@@ -140,10 +140,45 @@ See `requirements.txt` for Python dependencies. Key packages:
 - Reply information is included in context but not predicted 🔗
 - Training examples are split randomly (not by conversation) since they're independent once tokenized 🎲
 
+## Backend
+
+The backend is a FastAPI server that integrates with BlueBubbles (local iMessage server) and a GPU server hosting the language model.
+
+### Architecture
+
+- **BlueBubbles Server**: Local macOS server for iMessage integration
+- **FastAPI Backend**: Handles webhooks, manages conversation context, and orchestrates actions
+- **GPU Server**: Hosts the LLM for inference (supports vLLM, Ollama, TGI)
+
+### Flow
+
+1. BlueBubbles webhook receives a new incoming message
+2. Backend fetches conversation history (if not cached) and populates context window
+3. Model inference is performed with conversation context
+4. **TEMPORARY**: Model output is sent as plain text to the sender
+5. **TODO**: Replace with proper tool calling extraction to parse and execute structured actions
+
+### Configuration
+
+Backend configuration is managed through:
+- **Environment Variables** (`.env`): BlueBubbles URL/password, GPU server URL/API key, backend host/port
+- **Inference Config** (`backend/inference_config.yaml`): Model parameters (temperature, max_tokens, etc.)
+
+### Running the Backend
+
+```bash
+cd backend
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+### Important Notes
+
+⚠️ **Temporary Solution**: Currently, the model output is sent directly as text to the sender. This is a temporary implementation that needs to be replaced with efficient tool calling extraction. The model should output structured actions (send, reply, react, etc.) that are then parsed and executed appropriately.
+
 ## Future Work
 
 - Model evaluation and generation testing 🧪
 - Integration with phone/texting interface 📲
-- Tool calling support (send, summarize) 🛠️
+- **Tool calling extraction and execution** (replaces temporary text sending) 🛠️
 - Additional filtering and data quality improvements ✨
 
