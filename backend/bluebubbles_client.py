@@ -4,8 +4,7 @@ from .config import BackendConfig
 
 
 ReactionType = Literal[
-    "love", "like", "dislike", "laugh", "emphasize", "question",
-    "-love", "-like", "-dislike", "-laugh", "-emphasize", "-question"
+    "love", "like", "dislike", "laugh", "emphasize", "question"
 ]
 
 VALID_REACTIONS = set(get_args(ReactionType))

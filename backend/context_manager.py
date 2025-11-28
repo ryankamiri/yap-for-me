@@ -171,6 +171,33 @@ class ContextManager:
     def get_messages(self, chat_guid: str) -> List[Message]:
         return self.contexts.get(chat_guid, [])
     
+    def _format_replying_to(self, replied_to_msg: Dict) -> str:
+        """Format a replied-to message in training data format.
+        
+        Format: "➜ Replying to {speaker}, {timestamp}: « {text} »"
+        """
+        handle = replied_to_msg.get("handle", {})
+        is_from_me = replied_to_msg.get("isFromMe", False)
+        
+        if is_from_me:
+            speaker = self.outgoing_speaker_name
+        elif handle:
+            speaker = handle.get("name") or handle.get("address") or "Unknown"
+        else:
+            speaker = "Unknown"
+        
+        timestamp = self._format_timestamp(replied_to_msg.get("dateCreated", 0))
+        text = replied_to_msg.get("text", "")
+        
+        return f"➜ Replying to {speaker}, {timestamp}: « {text} »"
+    
+    def _find_message_by_guid(self, bluebubbles_messages: List[Dict], guid: str) -> Optional[Dict]:
+        """Find a message in the list by its GUID."""
+        for msg in bluebubbles_messages:
+            if msg.get("guid") == guid:
+                return msg
+        return None
+    
     def populate_from_bluebubbles_messages(
         self,
         chat_guid: str,
@@ -187,7 +214,7 @@ class ContextManager:
             message_guid = msg_data.get("guid", "")
             date_created = msg_data.get("dateCreated", "")
             is_from_me = msg_data.get("isFromMe", False)
-            reply_to_guid = msg_data.get("replyToGuid")
+            reply_to_guid = msg_data.get("replyToGuid") or msg_data.get("threadOriginatorGuid")
             
             handle = msg_data.get("handle", {})
             if is_from_me:
@@ -199,12 +226,18 @@ class ContextManager:
             
             timestamp = self._format_timestamp(date_created)
             
+            replying_to_formatted = None
+            if reply_to_guid:
+                replied_to_msg = self._find_message_by_guid(bluebubbles_messages, reply_to_guid)
+                if replied_to_msg:
+                    replying_to_formatted = self._format_replying_to(replied_to_msg)
+            
             message = Message(
                 timestamp=timestamp,
                 speaker=speaker,
                 text=text,
                 message_guid=message_guid,
-                replying_to=reply_to_guid
+                replying_to=replying_to_formatted
             )
             
             self.contexts[chat_guid].insert(0, message)

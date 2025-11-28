@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Request, HTTPException, Depends
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import logging
+import re
 
 from .context_manager import ContextManager
 from .model_client import ModelClient
 from .bluebubbles_client import BlueBubblesClient
 from .debounce_manager import DebounceManager
+from .actions import ActionExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,74 @@ def get_debounce_manager(request: Request) -> DebounceManager:
     return request.app.state.debounce_manager
 
 
+def get_action_executor(request: Request) -> ActionExecutor:
+    return request.app.state.action_executor
+
+
+def parse_tool_calls(model_output: str) -> List[Dict[str, Any]]:
+    """Parse code-style tool calls from model output.
+    
+    Extracts tool calls in format:
+    - react(message_guid="...", reaction_type="...")
+    - reply(message_guid="...", text="...")
+    - send_message(text="...")
+    
+    Returns:
+        List of dicts with 'action_type' and 'params' keys
+    """
+    tool_calls = []
+    
+    lines = model_output.strip().split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        react_match = re.match(r'react\s*\(\s*message_guid\s*=\s*"([^"]+)"\s*,\s*reaction_type\s*=\s*"([^"]+)"\s*\)', line)
+        if react_match:
+            tool_calls.append({
+                'action_type': 'react',
+                'params': {
+                    'message_guid': react_match.group(1),
+                    'reaction_type': react_match.group(2)
+                }
+            })
+            continue
+        
+        reply_match = re.match(r'reply\s*\(\s*message_guid\s*=\s*"([^"]+)"\s*,\s*text\s*=\s*(.+?)\s*\)', line, re.DOTALL)
+        if reply_match:
+            text_value = reply_match.group(2).strip()
+            if text_value.startswith('"') and text_value.endswith('"'):
+                text_value = text_value[1:-1]
+            elif text_value.startswith("'") and text_value.endswith("'"):
+                text_value = text_value[1:-1]
+            tool_calls.append({
+                'action_type': 'reply',
+                'params': {
+                    'message_guid': reply_match.group(1),
+                    'text': text_value
+                }
+            })
+            continue
+        
+        send_msg_match = re.match(r'send_message\s*\(\s*text\s*=\s*(.+?)\s*\)', line, re.DOTALL)
+        if send_msg_match:
+            text_value = send_msg_match.group(1).strip()
+            if text_value.startswith('"') and text_value.endswith('"'):
+                text_value = text_value[1:-1]
+            elif text_value.startswith("'") and text_value.endswith("'"):
+                text_value = text_value[1:-1]
+            tool_calls.append({
+                'action_type': 'send_message',
+                'params': {
+                    'text': text_value
+                }
+            })
+            continue
+    
+    return tool_calls
+
+
 class MessageEvent(BaseModel):
     chat_guid: str
     message_guid: str
@@ -45,7 +115,8 @@ async def _process_message(
     replying_to: Optional[str],
     context_manager: ContextManager,
     model_client: ModelClient,
-    bluebubbles_client: BlueBubblesClient
+    bluebubbles_client: BlueBubblesClient,
+    action_executor: ActionExecutor
 ) -> None:
     """Process a message after debounce period."""
     try:
@@ -63,16 +134,25 @@ async def _process_message(
         
         logger.info(f"Model output for chat {chat_guid}: {model_output}")
         
-        # TODO: TEMPORARY SOLUTION - Replace with proper tool calling extraction
-        # Currently, we just send the raw model output as text. This needs to be replaced
-        # with efficient tool calling extraction that parses the model output to extract
-        # structured actions (send, reply, react, etc.) and executes them appropriately.
-        if model_output.strip():
-            try:
-                await bluebubbles_client.send_message(chat_guid, model_output.strip())
-                logger.info(f"Sent model output to chat {chat_guid}")
-            except Exception as e:
-                logger.error(f"Failed to send message to chat {chat_guid}: {str(e)}")
+        tool_calls = parse_tool_calls(model_output)
+        
+        if not tool_calls:
+            logger.warning(f"No tool calls parsed from model output for chat {chat_guid}")
+            return
+        
+        for tool_call in tool_calls:
+            action_type = tool_call.get('action_type')
+            params = tool_call.get('params', {})
+            params['chat_guid'] = chat_guid
+            
+            logger.info(f"Executing action {action_type} for chat {chat_guid} with params: {params}")
+            
+            result = await action_executor.execute_action(action_type, params)
+            
+            if result.get('success'):
+                logger.info(f"Successfully executed {action_type} for chat {chat_guid}")
+            else:
+                logger.error(f"Failed to execute {action_type} for chat {chat_guid}: {result.get('error')}")
     
     except Exception as e:
         logger.error(f"Error in debounced message processing: {str(e)}", exc_info=True)
@@ -136,6 +216,8 @@ async def handle_message_webhook(
         
         context_manager.add_message(chat_guid, message_data_dict)
         
+        action_executor = get_action_executor(request)
+        
         await debounce_manager.debounce(
             chat_guid,
             _process_message,
@@ -143,7 +225,8 @@ async def handle_message_webhook(
             replying_to=replying_to,
             context_manager=context_manager,
             model_client=model_client,
-            bluebubbles_client=bluebubbles_client
+            bluebubbles_client=bluebubbles_client,
+            action_executor=action_executor
         )
         
         return {
