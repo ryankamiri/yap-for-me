@@ -68,7 +68,7 @@ def main():
     
     batch_size = config.get("training.batch_size")
     num_epochs = config.get("training.epochs")
-    learning_rate = config.get("training.learning_rate")
+    learning_rate = float(config.get("training.learning_rate"))
     eval_steps = config.get("training.eval_steps")
     save_steps = config.get("training.save_steps")
     
