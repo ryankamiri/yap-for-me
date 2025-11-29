@@ -32,11 +32,17 @@ def main():
     torch.manual_seed(random_seed)
     if torch.cuda.is_available():
         device = torch.device("cuda")
+        torch.cuda.manual_seed_all(random_seed)
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
     print(f"Using torch device: {device}")
+    
+    # Create generator for reproducible DataLoader shuffling
+    # This ensures shuffling is deterministic across runs but different each epoch
+    generator = torch.Generator()
+    generator.manual_seed(random_seed)
     
     print(f"Loading tokenizer: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -79,7 +85,8 @@ def main():
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True
+        shuffle=True,
+        generator=generator
     )
     
     val_loader = DataLoader(
