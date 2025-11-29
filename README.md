@@ -100,7 +100,6 @@ Key configuration options in `training/configs/config.yaml`:
 - `model.name`: Hugging Face model identifier
 - `model.max_length`: Maximum sequence length (4096)
 - `dataset.tokenized_examples_path`: Path to pre-tokenized examples
-- `dataset.outgoing_speaker_name`: Name for your outgoing messages
 - `training.epochs`: Number of training epochs
 - `training.batch_size`: Batch size
 - `training.learning_rate`: Learning rate
