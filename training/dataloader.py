@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 import random
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
@@ -66,6 +67,10 @@ def build_training_examples_from_conversations(
 ) -> List[Dict]:
     """Build training examples from conversations.
     
+    Optimized version: Pre-tokenizes messages once per conversation, then builds
+    examples by slicing pre-tokenized token arrays. Uses batch tokenization and
+    numpy for efficient operations.
+    
     Groups consecutive Outgoing messages and creates training examples:
     - Context: All messages before the first Outgoing in the group (uses text field)
     - Target: Combined tool calls from all Outgoing messages in the group
@@ -84,30 +89,48 @@ def build_training_examples_from_conversations(
     for _, conversation in enumerate(conversations):
         messages = conversation['messages']
         
-        outgoing_groups = group_consecutive_outgoing(messages)
+        # Early filter: Skip conversations with no outgoing messages
+        if not any(msg['type'] == 'Outgoing' for msg in messages):
+            continue
         
+        # Phase 1: Pre-tokenization (once per conversation)
+        
+        # Compute outgoing groups first
+        outgoing_groups = group_consecutive_outgoing(messages)
+        if not outgoing_groups:
+            continue
+        
+        # Format all messages once (with trailing newlines)
+        formatted_messages = []
+        for msg in messages:
+            formatted = format_message(
+                msg['timestamp'],
+                msg['speaker'],
+                msg['text'],
+                msg['replying_to'],
+                msg['guid']
+            )
+            formatted_with_newline = formatted + '\n'
+            formatted_messages.append(formatted_with_newline)
+        
+        # Batch tokenize all formatted messages
+        tokenized_results = tokenizer(
+            formatted_messages,
+            add_special_tokens=False,
+            return_attention_mask=False
+        )['input_ids']
+        pre_tokenized_messages = [np.array(tokens, dtype=np.int64) for tokens in tokenized_results]
+        
+        # Collect all tool call texts for all outgoing groups
+        tool_call_texts = []
+        valid_groups = []
         for group in outgoing_groups:
             if not group:
                 continue
             
             first_outgoing_idx = group[0]
-            
             if not has_incoming_context(messages, first_outgoing_idx):
                 continue
-            
-            context_messages = messages[:first_outgoing_idx]
-            
-            context_texts = []
-            for msg in context_messages:
-                context_texts.append(
-                    format_message(
-                        msg['timestamp'],
-                        msg['speaker'],
-                        msg['text'],
-                        msg['replying_to'],
-                        msg['guid']
-                    )
-                )
             
             tool_calls = []
             for msg_idx in group:
@@ -116,38 +139,71 @@ def build_training_examples_from_conversations(
                 if tool_call:
                     tool_calls.append(tool_call)
             
-            if not tool_calls:
+            if tool_calls:
+                tool_call_texts.append('\n'.join(tool_calls))
+                valid_groups.append(group)
+        
+        if not tool_call_texts:
+            continue
+        
+        # Batch tokenize all tool call texts
+        tool_call_tokenized = tokenizer(
+            tool_call_texts,
+            add_special_tokens=False,
+            return_attention_mask=False
+        )['input_ids']
+        pre_tokenized_tool_calls = [np.array(tokens, dtype=np.int64) for tokens in tool_call_tokenized]
+        
+        # Phase 2: Build examples using pre-tokenized data
+        
+        # Pre-concatenate ALL messages once
+        full_context_tokens = np.concatenate(pre_tokenized_messages)
+        
+        # Pre-compute cumulative token counts for each message boundary
+        # This tells us where each message ends in the concatenated array
+        cumulative_lengths = [0]
+        for msg_tokens in pre_tokenized_messages:
+            cumulative_lengths.append(cumulative_lengths[-1] + len(msg_tokens))
+        
+        for group, tool_call_tokens in zip(valid_groups, pre_tokenized_tool_calls):
+            first_outgoing_idx = group[0]
+            
+            if first_outgoing_idx == 0:
                 continue
             
-            target_tool_calls_text = '\n'.join(tool_calls)
+            # Slice directly from pre-concatenated array 
+            # cumulative_lengths[first_outgoing_idx] gives us the end position
+            context_tokens = full_context_tokens[:cumulative_lengths[first_outgoing_idx]]
             
-            context_text = '\n'.join(context_texts)
-            
-            context_tokens = tokenizer.encode(context_text, add_special_tokens=False)
-            tool_call_tokens = tokenizer.encode(target_tool_calls_text, add_special_tokens=False)
-            
-            # Truncate context tokens if they are too long
-            if len(context_tokens) > max_length - len(tool_call_tokens):
+            # Truncate context if needed (add-then-truncate approach)
+            total_length = len(context_tokens) + len(tool_call_tokens)
+            if total_length > max_length:
                 available_context = max_length - len(tool_call_tokens)
                 if available_context <= 0:
                     continue
                 context_tokens = context_tokens[-available_context:]
             
-            # Handle case where context + target exceeds max_length
-            total_length = len(context_tokens) + len(tool_call_tokens)
-            if total_length > max_length:
+            # Handle tool call truncation if still needed
+            final_total = len(context_tokens) + len(tool_call_tokens)
+            if final_total > max_length:
                 available_for_tool_calls = max_length - len(context_tokens)
                 if available_for_tool_calls <= 0:
                     continue
                 tool_call_tokens = tool_call_tokens[:available_for_tool_calls]
             
-            # Labels: -100 for context (not predicted), normal labels for tool calls only
-            input_ids = context_tokens + tool_call_tokens
-            labels = [-100] * len(context_tokens) + tool_call_tokens
+            # Combine context and tool calls
+            input_ids = np.concatenate([context_tokens, tool_call_tokens])
             
+            # Create labels: -100 for context, normal labels for tool calls
+            labels = np.concatenate([
+                np.full(len(context_tokens), -100, dtype=np.int64),
+                tool_call_tokens
+            ])
+            
+            # Convert to Python lists for storage
             examples.append({
-                'input_ids': input_ids,
-                'labels': labels,
+                'input_ids': input_ids.tolist(),
+                'labels': labels.tolist(),
                 'context_length': len(context_tokens),
                 'target_length': len(tool_call_tokens)
             })

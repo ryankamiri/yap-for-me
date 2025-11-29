@@ -43,15 +43,22 @@ def main():
     
     print(f"Building training examples with {num_workers} workers (this may take a while)...")
     
+    chunk_size = 10
+    conversation_chunks = []
+    for i in range(0, len(conversations), chunk_size):
+        chunk = [(i+j, conv) for j, conv in enumerate(conversations[i:i+chunk_size])]
+        conversation_chunks.append(chunk)
+    
     # Process conversations in parallel
     all_examples = []
     with mp.Pool(processes=num_workers, initializer=init_worker, initargs=(model_name, config.get("model.tokenizer_kwargs", {}), max_length)) as pool:
-        results = pool.imap(process_conversation_worker, enumerate(conversations))
+        results = pool.imap(process_conversation_batch, conversation_chunks)
         
-        for idx, conv_examples in enumerate(results):
+        for chunk_idx, conv_examples in enumerate(results):
             all_examples.extend(conv_examples)
-            if (idx + 1) % 100 == 0:
-                print(f"  Processed {idx + 1}/{len(conversations)} conversations... ({len(all_examples)} examples so far)")
+            conversations_processed = min((chunk_idx + 1) * chunk_size, len(conversations))
+            if conversations_processed % 100 == 0 or chunk_idx == len(conversation_chunks) - 1:
+                print(f"  Processed {conversations_processed}/{len(conversations)} conversations... ({len(all_examples)} examples so far)")
     
     print(f"Created {len(all_examples)} training examples")
     
@@ -80,23 +87,25 @@ def init_worker(model_name, tokenizer_kwargs, max_length):
     _worker_max_length = max_length
 
 
-def process_conversation_worker(args):
-    """Process a single conversation in a worker process."""
-    _, conversation = args
+def process_conversation_batch(chunk):
+    """Process a batch of conversations in a worker process."""
+    all_examples = []
+    for _, conversation in chunk:
+        # Build examples for this conversation
+        conv_examples = build_training_examples_from_conversations(
+            [conversation],
+            _worker_tokenizer,
+            max_length=_worker_max_length
+        )
+        
+        # Add conversation metadata to each example
+        conversation_id = conversation['chat_session']
+        for example in conv_examples:
+            example['conversation_id'] = conversation_id
+        
+        all_examples.extend(conv_examples)
     
-    # Build examples for this conversation
-    conv_examples = build_training_examples_from_conversations(
-        [conversation],
-        _worker_tokenizer,
-        max_length=_worker_max_length
-    )
-    
-    # Add conversation metadata to each example
-    conversation_id = conversation['chat_session']
-    for example in conv_examples:
-        example['conversation_id'] = conversation_id
-    
-    return conv_examples
+    return all_examples
 
 
 if __name__ == "__main__":
