@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
 #SBATCH --time=08:00:00
-#SBATCH --job-name=yap
+#SBATCH --job-name=train-yap
 #SBATCH --output=out/%j/log.log
 
 cd $SLURM_SUBMIT_DIR    # ensure we start where sbatch was called
