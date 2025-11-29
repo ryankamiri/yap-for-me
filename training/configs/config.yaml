@@ -12,8 +12,8 @@ dataset:
   path: "data/conversations.json"
   tokenized_examples_path: "data/tokenized_examples.pt"
   train_split: 0.8
-  val_split: 0.1
-  test_split: 0.1
+  val_split: 0.15
+  test_split: 0.05
   random_seed: 42
   padding_side: "left"
 
