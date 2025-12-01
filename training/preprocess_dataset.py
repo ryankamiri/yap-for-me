@@ -113,4 +113,4 @@ if __name__ == "__main__":
 
 # Extract command:
 # rsync -avz --progress amiri.ry@login.explorer.northeastern.edu:/projects/llpr/amiri.ry/projects/yap-for-me/training/data/tokenized_examples.pt /Users/ramiri/dev/projects/YapForMe/training/data/
-
+# 77,759 total examples (Train: 142,207, Val: 26,663, Test: 8,889).

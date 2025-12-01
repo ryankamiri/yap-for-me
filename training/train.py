@@ -11,6 +11,38 @@ from config import Config
 from dataloader import create_datasets
 
 
+def format_bytes(bytes_val):
+    """Format bytes to human-readable string."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if bytes_val < 1024.0:
+            return f"{bytes_val:.2f} {unit}"
+        bytes_val /= 1024.0
+    return f"{bytes_val:.2f} PB"
+
+
+def log_gpu_memory(stage=""):
+    """Log GPU memory usage."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated()
+        reserved = torch.cuda.memory_reserved()
+        total = torch.cuda.get_device_properties(0).total_memory
+        
+        print(f"GPU Memory {stage}:")
+        print(f"Allocated: {format_bytes(allocated)} ({allocated / total * 100:.1f}%)")
+        print(f"Reserved: {format_bytes(reserved)} ({reserved / total * 100:.1f}%)")
+        print(f"Total: {format_bytes(total)}")
+        print(f"Free: {format_bytes(total - reserved)}")
+        print()
+        
+        return {
+            "allocated": allocated,
+            "reserved": reserved,
+            "total": total,
+            "free": total - reserved
+        }
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train YapForMe model")
     parser.add_argument(
@@ -54,11 +86,36 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     
     print(f"Loading model: {model_name}")
+    
+    # Convert dtype string to torch dtype if needed
+    model_kwargs = config.get("model.model_kwargs", {}).copy()
+    if "dtype" in model_kwargs:
+        dtype_str = model_kwargs.pop("dtype")
+        dtype_map = {
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }
+        if dtype_str in dtype_map:
+            model_kwargs["torch_dtype"] = dtype_map[dtype_str]
+            print(f"Converting dtype '{dtype_str}' to torch.{dtype_str}")
+        else:
+            raise ValueError(f"Unsupported dtype: {dtype_str}")
+    
+    log_gpu_memory("Before model load")
+    
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        **config.get("model.model_kwargs", {})
+        **model_kwargs
     )
     model.to(device)
+    
+    # Enable gradient checkpointing to save memory
+    if hasattr(model, "gradient_checkpointing_enable"):
+        model.gradient_checkpointing_enable()
+        print("Gradient checkpointing enabled")
+    
+    log_gpu_memory("After model load")
     
     print(f"Loading pre-tokenized examples from: {tokenized_examples_path}")
     train_dataset, val_dataset, _ = create_datasets(
@@ -99,6 +156,8 @@ def main():
         model.parameters(),
         lr=learning_rate
     )
+    
+    log_gpu_memory("After optimizer creation")
     
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
     
@@ -146,6 +205,9 @@ def main():
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device) # (B, L)
             
+            if batch_idx == 0:
+                log_gpu_memory("Before first forward pass")
+            
             outputs = model(input_ids=input_ids, attention_mask=attention_mask)
             logits = outputs.logits # (B, L, V)
             
@@ -166,10 +228,16 @@ def main():
             
             loss.backward()
             
+            if batch_idx == 0:
+                log_gpu_memory("After first backward pass")
+            
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
             global_step += 1
+            
+            if batch_idx == 0:
+                log_gpu_memory("After first optimizer step")
             
             total_train_loss += loss.item()
             
@@ -180,7 +248,11 @@ def main():
             }, step=global_step)
             
             if (batch_idx + 1) % 100 == 0 or (batch_idx + 1) == num_batches:
-                print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item():.4f}")
+                if torch.cuda.is_available():
+                    allocated = torch.cuda.memory_allocated()
+                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item():.4f}, GPU Memory: {format_bytes(allocated)}")
+                else:
+                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item():.4f}")
             
             if global_step % eval_steps == 0:
                 val_loss = evaluate_model(model, val_loader, criterion, device)
