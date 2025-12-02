@@ -97,7 +97,7 @@ def main():
             "float32": torch.float32,
         }
         if dtype_str in dtype_map:
-            model_kwargs["torch_dtype"] = dtype_map[dtype_str]
+            model_kwargs["dtype"] = dtype_map[dtype_str]
             print(f"Converting dtype '{dtype_str}' to torch.{dtype_str}")
         else:
             raise ValueError(f"Unsupported dtype: {dtype_str}")
@@ -110,10 +110,15 @@ def main():
     )
     model.to(device)
     
-    # Enable gradient checkpointing to save memory
-    if hasattr(model, "gradient_checkpointing_enable"):
-        model.gradient_checkpointing_enable()
-        print("Gradient checkpointing enabled")
+    gradient_checkpointing = config.get("training.gradient_checkpointing", False)
+    if gradient_checkpointing:
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+            print("Gradient checkpointing enabled")
+        else:
+            print("Warning: Gradient checkpointing requested but not supported by this model")
+    else:
+        print("Gradient checkpointing disabled (config: false)")
     
     log_gpu_memory("After model load")
     
@@ -134,6 +139,7 @@ def main():
     learning_rate = float(config.get("training.learning_rate"))
     eval_steps = config.get("training.eval_steps")
     save_steps = config.get("training.save_steps")
+    dataloader_workers = config.get("training.dataloader_workers", 4)
     
     # Use SLURM job output directory: out/{job_id}/
     output_dir = f"out/{slurm_job_id}"
@@ -143,13 +149,21 @@ def main():
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        generator=generator
+        generator=generator,
+        num_workers=dataloader_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
     )
     
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
-        shuffle=False
+        shuffle=False,
+        num_workers=dataloader_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
     )
     
     optimizer = torch.optim.AdamW(
@@ -243,7 +257,6 @@ def main():
             
             wandb.log({
                 "train/loss": loss.item(),
-                "train/step": global_step,
                 "train/epoch": epoch,
             }, step=global_step)
             
@@ -354,6 +367,12 @@ def save_checkpoint(model, tokenizer, optimizer, epoch, step, val_loss, output_d
         checkpoint_state['val_loss'] = val_loss
     
     torch.save(checkpoint_state, checkpoint_dir / "training_state.pt")
+
+
+# Target loss goals for production-ready model:
+# - Validation loss: 1.0-1.3 (excellent), 1.3-1.5 (good), <1.0 (SOTA)
+# - Test loss: Should be within 0.1-0.2 of validation loss (good generalization)
+# - Training/val gap: <0.2 indicates good generalization, >0.3 suggests overfitting
 
 
 if __name__ == "__main__":

@@ -124,3 +124,6 @@ lightning_logs/
 processed_data/
 intermediate_data/
 
+# Output Directories
+out/
+

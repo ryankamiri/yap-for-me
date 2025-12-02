@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=64GB
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128GB
 #SBATCH --time=08:00:00
 #SBATCH --job-name=train-yap
 #SBATCH --output=out/%j/log.log
