@@ -346,7 +346,9 @@ def load_tokenized_examples(torch_path: str) -> List[Dict]:
             f"Please run preprocess_dataset.py first to create the tokenized examples."
         )
     
-    examples = torch.load(torch_path, map_location='cpu')
+    # Load our own preprocessed dataset containing dictionaries (not just weights)
+    # weights_only=False is required since the file contains arbitrary Python objects
+    examples = torch.load(torch_path, map_location='cpu', weights_only=False)
     return examples
 
 
