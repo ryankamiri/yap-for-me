@@ -279,7 +279,7 @@ def main():
                 else:
                     print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}")
             
-            if global_step % eval_steps == 0:
+            if global_step > 0 and global_step % eval_steps == 0:
                 val_loss = evaluate_model(model, val_loader, criterion, device)
                 print(f"Step {global_step}: Validation Loss: {val_loss:.4f}")
                 
@@ -294,7 +294,7 @@ def main():
                     print(f"Saved best model (val_loss: {val_loss:.4f})")
                     wandb.log({"eval/best_loss": best_val_loss}, step=global_step)
             
-            if global_step % save_steps == 0:
+            if global_step > 0 and global_step % save_steps == 0:
                 save_checkpoint(model, tokenizer, optimizer, epoch, global_step, None, output_dir, f"checkpoint-{global_step}")
         
         avg_train_loss = total_train_loss / len(train_loader)
