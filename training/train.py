@@ -135,6 +135,7 @@ def main():
     )
     
     batch_size = config.get("training.batch_size")
+    gradient_accumulation_steps = config.get("training.gradient_accumulation_steps", 1)
     num_epochs = config.get("training.epochs")
     learning_rate = float(config.get("training.learning_rate"))
     eval_steps = config.get("training.eval_steps")
@@ -179,6 +180,8 @@ def main():
     print(f"Training Configuration:")
     print(f"Epochs: {num_epochs}")
     print(f"Batch size: {batch_size}")
+    print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
+    print(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
     print(f"Learning rate: {learning_rate}")
     print(f"Output directory: {output_dir}")
     
@@ -189,6 +192,8 @@ def main():
             "model_name": model_name,
             "max_length": max_length,
             "batch_size": batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "effective_batch_size": batch_size * gradient_accumulation_steps,
             "num_epochs": num_epochs,
             "learning_rate": learning_rate,
             "eval_steps": eval_steps,
@@ -240,32 +245,39 @@ def main():
             
             loss = criterion(flat_logits, flat_labels)
             
+            # Scale loss by gradient accumulation steps
+            loss = loss / gradient_accumulation_steps
             loss.backward()
             
             if batch_idx == 0:
                 log_gpu_memory("After first backward pass")
             
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            optimizer.zero_grad()
-            global_step += 1
+            # Only step optimizer every gradient_accumulation_steps batches
+            if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == num_batches:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                global_step += 1
+                
+                if batch_idx == 0:
+                    log_gpu_memory("After first optimizer step")
             
-            if batch_idx == 0:
-                log_gpu_memory("After first optimizer step")
+            # Track unscaled loss for logging
+            total_train_loss += loss.item() * gradient_accumulation_steps
             
-            total_train_loss += loss.item()
-            
-            wandb.log({
-                "train/loss": loss.item(),
-                "train/epoch": epoch,
-            }, step=global_step)
+            # Log loss at each accumulation step (scaled back up for display)
+            if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == num_batches:
+                wandb.log({
+                    "train/loss": loss.item() * gradient_accumulation_steps,
+                    "train/epoch": epoch,
+                }, step=global_step)
             
             if (batch_idx + 1) % 100 == 0 or (batch_idx + 1) == num_batches:
                 if torch.cuda.is_available():
                     allocated = torch.cuda.memory_allocated()
-                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item():.4f}, GPU Memory: {format_bytes(allocated)}")
+                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}, GPU Memory: {format_bytes(allocated)}")
                 else:
-                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item():.4f}")
+                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}")
             
             if global_step % eval_steps == 0:
                 val_loss = evaluate_model(model, val_loader, criterion, device)
