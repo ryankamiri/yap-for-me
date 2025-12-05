@@ -1,7 +1,7 @@
 model:
   name: "mistralai/Mistral-7B-Instruct-v0.3"
   type: "mistral"
-  max_length: 4096
+  max_length: 2048
   tokenizer_kwargs:
     trust_remote_code: true
   model_kwargs:
@@ -11,8 +11,8 @@ model:
 dataset:
   path: "data/conversations.json"
   tokenized_examples_path: "data/tokenized_examples.pt"
-  train_split: 0.8
-  val_split: 0.15
+  train_split: 0.90
+  val_split: 0.05
   test_split: 0.05
   random_seed: 42
   padding_side: "left"
@@ -22,7 +22,7 @@ training:
   batch_size: 16
   gradient_accumulation_steps: 4
   learning_rate: 2e-5
-  eval_steps: 500
+  eval_steps: 2000
   save_steps: 1000
   gradient_checkpointing: true
   dataloader_workers: 4
