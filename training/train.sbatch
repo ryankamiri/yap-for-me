@@ -18,5 +18,6 @@ conda activate yap
 
 # run script
 export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python3 -u train.py \
   --config configs/config.yaml
