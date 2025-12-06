@@ -10,7 +10,7 @@ model:
 
 dataset:
   path: "data/conversations.json"
-  tokenized_examples_path: "data/tokenized_examples.pt"
+  tokenized_examples_path: "data/tokenized_examples_2048.pt"
   train_split: 0.90
   val_split: 0.05
   test_split: 0.05
