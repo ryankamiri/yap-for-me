@@ -8,6 +8,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --job-name=train-yap
 #SBATCH --output=out/%j/log.log
+#SBATCH --signal=USR1@60
 
 cd $SLURM_SUBMIT_DIR    # ensure we start where sbatch was called
 
@@ -19,5 +20,14 @@ conda activate yap
 # run script
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# Check if --resume argument was passed
+RESUME_ARG=""
+if [ "$1" == "--resume" ] && [ -n "$2" ]; then
+    RESUME_ARG="--resume $2"
+    echo "Resuming from job: $2"
+fi
+
 python3 -u train.py \
-  --config configs/config.yaml
+  --config configs/config.yaml \
+  $RESUME_ARG
