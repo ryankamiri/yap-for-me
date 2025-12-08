@@ -3,9 +3,7 @@ import os
 from pathlib import Path
 import torch
 import torch.nn as nn
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import wandb
 
@@ -22,17 +20,14 @@ def format_bytes(bytes_val):
     return f"{bytes_val:.2f} PB"
 
 
-def log_gpu_memory(stage="", device=None):
+def log_gpu_memory(stage=""):
     """Log GPU memory usage."""
-    if device is None:
-        device = torch.cuda.current_device() if torch.cuda.is_available() else None
-    
-    if device is not None and torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated(device)
-        reserved = torch.cuda.memory_reserved(device)
-        total = torch.cuda.get_device_properties(device).total_memory
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated()
+        reserved = torch.cuda.memory_reserved()
+        total = torch.cuda.get_device_properties(0).total_memory
         
-        print(f"GPU Memory {stage} (GPU {device}):")
+        print(f"GPU Memory {stage}:")
         print(f"Allocated: {format_bytes(allocated)} ({allocated / total * 100:.1f}%)")
         print(f"Reserved: {format_bytes(reserved)} ({reserved / total * 100:.1f}%)")
         print(f"Total: {format_bytes(total)}")
@@ -48,41 +43,6 @@ def log_gpu_memory(stage="", device=None):
     return None
 
 
-def setup_distributed():
-    """
-    Initialize distributed training if running with torchrun.
-    Returns: (rank, local_rank, world_size, device, is_main_process)
-    """
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        rank = int(os.environ['RANK'])
-        local_rank = int(os.environ['LOCAL_RANK'])
-        world_size = int(os.environ['WORLD_SIZE'])
-        
-        dist.init_process_group(backend='nccl')
-        
-        device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(device)
-        
-        is_main_process = (rank == 0)
-        
-        return rank, local_rank, world_size, device, is_main_process
-    
-    else:
-        rank = 0
-        local_rank = 0
-        world_size = 1
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        is_main_process = True
-        
-        return rank, local_rank, world_size, device, is_main_process
-
-
-def cleanup_distributed():
-    """Clean up distributed training."""
-    if dist.is_initialized():
-        dist.destroy_process_group()
-
-
 def main():
     parser = argparse.ArgumentParser(description="Train YapForMe model")
     parser.add_argument(
@@ -90,17 +50,10 @@ def main():
     )
     args = parser.parse_args()
     
-    rank, local_rank, world_size, device, is_main_process = setup_distributed()
-    
     config = Config(args.config)
     
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "no_job_id")
-    
-    if is_main_process:
-        print(f"SLURM Job ID: {slurm_job_id}")
-        print(f"Training on {world_size} GPU(s)")
-        if world_size > 1:
-            print(f"Rank {rank}/{world_size}, Local Rank: {local_rank}, Device: {device}")
+    print(f"SLURM Job ID: {slurm_job_id}")
     
     model_name = config.get("model.name")
     max_length = config.get("model.max_length")
@@ -110,15 +63,20 @@ def main():
 
     torch.manual_seed(random_seed)
     if torch.cuda.is_available():
+        device = torch.device("cuda")
         torch.cuda.manual_seed_all(random_seed)
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    print(f"Using torch device: {device}")
     
     # Create generator for reproducible DataLoader shuffling
     # This ensures shuffling is deterministic across runs but different each epoch
     generator = torch.Generator()
     generator.manual_seed(random_seed)
     
-    if is_main_process:
-        print(f"Loading tokenizer: {model_name}")
+    print(f"Loading tokenizer: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
         **config.get("model.tokenizer_kwargs", {})
@@ -127,9 +85,7 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    if is_main_process:
-        print(f"Loading model: {model_name}")
-        log_gpu_memory("Before model load", local_rank)
+    print(f"Loading model: {model_name}")
     
     # Convert dtype string to torch dtype if needed
     model_kwargs = config.get("model.model_kwargs", {}).copy()
@@ -142,10 +98,11 @@ def main():
         }
         if dtype_str in dtype_map:
             model_kwargs["dtype"] = dtype_map[dtype_str]
-            if is_main_process:
-                print(f"Converting dtype '{dtype_str}' to torch.{dtype_str}")
+            print(f"Converting dtype '{dtype_str}' to torch.{dtype_str}")
         else:
             raise ValueError(f"Unsupported dtype: {dtype_str}")
+    
+    log_gpu_memory("Before model load")
     
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
@@ -157,26 +114,15 @@ def main():
     if gradient_checkpointing:
         if hasattr(model, "gradient_checkpointing_enable"):
             model.gradient_checkpointing_enable()
-            if is_main_process:
-                print("Gradient checkpointing enabled")
+            print("Gradient checkpointing enabled")
         else:
-            if is_main_process:
-                print("Warning: Gradient checkpointing requested but not supported by this model")
+            print("Warning: Gradient checkpointing requested but not supported by this model")
     else:
-        if is_main_process:
-            print("Gradient checkpointing disabled")
+        print("Gradient checkpointing disabled (config: false)")
     
-    if world_size > 1:
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
-        if is_main_process:
-            print("Model wrapped with DistributedDataParallel")
+    log_gpu_memory("After model load")
     
-    if is_main_process:
-        log_gpu_memory("After model load", local_rank)
-    
-    if is_main_process:
-        print(f"Loading pre-tokenized examples from: {tokenized_examples_path}")
-    
+    print(f"Loading pre-tokenized examples from: {tokenized_examples_path}")
     train_dataset, val_dataset, _ = create_datasets(
         tokenized_examples_path=tokenized_examples_path,
         tokenizer=tokenizer,
@@ -188,9 +134,6 @@ def main():
         padding_side=padding_side
     )
     
-    if is_main_process:
-        print(f"Train: {len(train_dataset):,}, Val: {len(val_dataset):,}")
-    
     batch_size = config.get("training.batch_size")
     gradient_accumulation_steps = config.get("training.gradient_accumulation_steps", 1)
     num_epochs = config.get("training.epochs")
@@ -201,28 +144,13 @@ def main():
     
     # Use SLURM job output directory: out/{job_id}/
     output_dir = f"out/{slurm_job_id}"
-    if is_main_process:
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-    
-    if world_size > 1:
-        train_sampler = DistributedSampler(
-            train_dataset,
-            num_replicas=world_size,
-            rank=rank,
-            shuffle=True,
-            seed=random_seed
-        )
-        shuffle = False
-    else:
-        train_sampler = None
-        shuffle = True
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        sampler=train_sampler,
-        shuffle=shuffle,
-        generator=generator if world_size == 1 else None,
+        shuffle=True,
+        generator=generator,
         num_workers=dataloader_workers,
         pin_memory=True,
         persistent_workers=True,
@@ -244,58 +172,46 @@ def main():
         lr=learning_rate
     )
     
-    if is_main_process:
-        log_gpu_memory("After optimizer creation", local_rank)
+    log_gpu_memory("After optimizer creation")
     
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
     
-    effective_batch_size = batch_size * gradient_accumulation_steps * world_size
+    print()
+    print(f"Training Configuration:")
+    print(f"Epochs: {num_epochs}")
+    print(f"Batch size: {batch_size}")
+    print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
+    print(f"Effective batch size: {batch_size * gradient_accumulation_steps}")
+    print(f"Learning rate: {learning_rate}")
+    print(f"Output directory: {output_dir}")
     
-    if is_main_process:
-        print()
-        print(f"Training Configuration:")
-        print(f"Epochs: {num_epochs}")
-        print(f"Batch size (per GPU): {batch_size}")
-        print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
-        print(f"Number of GPUs: {world_size}")
-        print(f"Effective batch size: {effective_batch_size}")
-        print(f"Learning rate: {learning_rate}")
-        print(f"Output directory: {output_dir}")
-    
-    if is_main_process:
-        wandb.init(
-            project="yap-for-me",
-            name=f"{model_name.split('/')[-1]}-{slurm_job_id}",
-            config={
-                "model_name": model_name,
-                "max_length": max_length,
-                "batch_size": batch_size,
-                "gradient_accumulation_steps": gradient_accumulation_steps,
-                "num_gpus": world_size,
-                "effective_batch_size": effective_batch_size,
-                "num_epochs": num_epochs,
-                "learning_rate": learning_rate,
-                "eval_steps": eval_steps,
-                "save_steps": save_steps,
-                "random_seed": random_seed,
-                "slurm_job_id": slurm_job_id,
-            }
-        )
+    wandb.init(
+        project="yap-for-me",
+        name=f"{model_name.split('/')[-1]}-{slurm_job_id}",
+        config={
+            "model_name": model_name,
+            "max_length": max_length,
+            "batch_size": batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "effective_batch_size": batch_size * gradient_accumulation_steps,
+            "num_epochs": num_epochs,
+            "learning_rate": learning_rate,
+            "eval_steps": eval_steps,
+            "save_steps": save_steps,
+            "random_seed": random_seed,
+            "slurm_job_id": slurm_job_id,
+        }
+    )
     
     best_val_loss = float('inf')
     global_step = 0
     
     for epoch in range(num_epochs):
-        epoch_num = epoch + 1
-        
-        if world_size > 1:
-            train_sampler.set_epoch(epoch)
-        
-        if is_main_process:
-            print()
-            print(f"{'='*60}")
-            print(f"Epoch {epoch_num}/{num_epochs}")
-            print(f"{'='*60}")
+        epoch = epoch + 1
+        print()
+        print(f"{'='*60}")
+        print(f"Epoch {epoch}/{num_epochs}")
+        print(f"{'='*60}")
         
         model.train()
         total_train_loss = 0
@@ -308,8 +224,8 @@ def main():
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device) # (B, L)
             
-            if batch_idx == 0 and is_main_process:
-                log_gpu_memory("Before first forward pass", local_rank)
+            if batch_idx == 0:
+                log_gpu_memory("Before first forward pass")
             
             outputs = model(input_ids=input_ids, attention_mask=attention_mask)
             logits = outputs.logits # (B, L, V)
@@ -328,11 +244,13 @@ def main():
             flat_labels = shift_labels.view(B * L_minus_1)
             
             loss = criterion(flat_logits, flat_labels)
+            
+            # Scale loss by gradient accumulation steps
             loss = loss / gradient_accumulation_steps
             loss.backward()
             
-            if batch_idx == 0 and is_main_process:
-                log_gpu_memory("After first backward pass", local_rank)
+            if batch_idx == 0:
+                log_gpu_memory("After first backward pass")
             
             # Only step optimizer every gradient_accumulation_steps batches
             if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == num_batches:
@@ -341,31 +259,28 @@ def main():
                 optimizer.zero_grad()
                 global_step += 1
                 
-                if batch_idx == 0 and is_main_process:
-                    log_gpu_memory("After first optimizer step", local_rank)
+                if batch_idx == 0:
+                    log_gpu_memory("After first optimizer step")
             
             # Track unscaled loss for logging
             total_train_loss += loss.item() * gradient_accumulation_steps
             
             # Log loss at each accumulation step (scaled back up for display)
             if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == num_batches:
-                if is_main_process:
-                    wandb.log({
-                        "train/loss": loss.item() * gradient_accumulation_steps,
-                        "train/epoch": epoch_num,
-                    }, step=global_step)
+                wandb.log({
+                    "train/loss": loss.item() * gradient_accumulation_steps,
+                    "train/epoch": epoch,
+                }, step=global_step)
             
             if (batch_idx + 1) % 100 == 0 or (batch_idx + 1) == num_batches:
-                if is_main_process:
-                    if torch.cuda.is_available():
-                        allocated = torch.cuda.memory_allocated(device)
-                        print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}, GPU Memory: {format_bytes(allocated)}")
-                    else:
-                        print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}")
+                if torch.cuda.is_available():
+                    allocated = torch.cuda.memory_allocated()
+                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}, GPU Memory: {format_bytes(allocated)}")
+                else:
+                    print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}")
             
-            if is_main_process and global_step > 0 and global_step % eval_steps == 0:
-                model_to_eval = model.module if world_size > 1 else model
-                val_loss = evaluate_model(model_to_eval, val_loader, criterion, device)
+            if global_step > 0 and global_step % eval_steps == 0:
+                val_loss = evaluate_model(model, val_loader, criterion, device)
                 print(f"Step {global_step}: Validation Loss: {val_loss:.4f}")
                 
                 wandb.log({
@@ -375,53 +290,41 @@ def main():
                 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                    save_checkpoint(model_to_eval, tokenizer, optimizer, epoch_num, global_step, val_loss, output_dir, "best")
+                    save_checkpoint(model, tokenizer, optimizer, epoch, global_step, val_loss, output_dir, "best")
                     print(f"Saved best model (val_loss: {val_loss:.4f})")
                     wandb.log({"eval/best_loss": best_val_loss}, step=global_step)
-                
-                model.train()
             
-            if is_main_process and global_step > 0 and global_step % save_steps == 0:
-                model_to_save = model.module if world_size > 1 else model
-                save_checkpoint(model_to_save, tokenizer, optimizer, epoch_num, global_step, None, output_dir, f"checkpoint-{global_step}")
+            if global_step > 0 and global_step % save_steps == 0:
+                save_checkpoint(model, tokenizer, optimizer, epoch, global_step, None, output_dir, f"checkpoint-{global_step}")
         
         avg_train_loss = total_train_loss / len(train_loader)
+        print(f"\nAverage training loss: {avg_train_loss:.4f}")
         
-        if is_main_process:
-            print(f"\nAverage training loss: {avg_train_loss:.4f}")
-            
-            model_to_eval = model.module if world_size > 1 else model
-            val_loss = evaluate_model(model_to_eval, val_loader, criterion, device)
-            print(f"Validation loss: {val_loss:.4f}")
-            
-            wandb.log({
-                "epoch/train_loss": avg_train_loss,
-                "epoch/val_loss": val_loss,
-                "epoch/epoch": epoch_num,
-            }, step=global_step)
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                save_checkpoint(model_to_eval, tokenizer, optimizer, epoch_num, global_step, val_loss, output_dir, "best")
-                print(f"Saved best model (val_loss: {val_loss:.4f})")
-                wandb.log({"epoch/best_val_loss": best_val_loss}, step=global_step)
-            
-            model.train()
+        val_loss = evaluate_model(model, val_loader, criterion, device)
+        print(f"Validation loss: {val_loss:.4f}")
+        
+        wandb.log({
+            "epoch/train_loss": avg_train_loss,
+            "epoch/val_loss": val_loss,
+            "epoch/epoch": epoch,
+        }, step=global_step)
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            save_checkpoint(model, tokenizer, optimizer, epoch, global_step, val_loss, output_dir, "best")
+            print(f"Saved best model (val_loss: {val_loss:.4f})")
+            wandb.log({"epoch/best_val_loss": best_val_loss}, step=global_step)
     
-    if is_main_process:
-        print(f"\n{'='*60}")
-        print("Training complete!")
-        print(f"{'='*60}")
-        
-        model_to_save = model.module if world_size > 1 else model
-        save_checkpoint(model_to_save, tokenizer, optimizer, epoch_num, global_step, best_val_loss, output_dir, "final")
-        
-        wandb.log({"final/best_val_loss": best_val_loss})
-        wandb.finish()
-        
-        print(f"\nFinal model saved to {output_dir}")
+    print(f"\n{'='*60}")
+    print("Training complete!")
+    print(f"{'='*60}")
     
-    cleanup_distributed()
+    save_checkpoint(model, tokenizer, optimizer, epoch, global_step, best_val_loss, output_dir, "final")
+    
+    wandb.log({"final/best_val_loss": best_val_loss})
+    wandb.finish()
+    
+    print(f"\nFinal model saved to {output_dir}")
 
 
 def evaluate_model(model, val_loader, criterion, device):
@@ -454,6 +357,7 @@ def evaluate_model(model, val_loader, criterion, device):
             loss = criterion(flat_logits, flat_labels)
             total_val_loss += loss.item()
     
+    model.train()
     return total_val_loss / len(val_loader)
 
 
