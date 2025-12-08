@@ -2,8 +2,8 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:h200:4
-#SBATCH --cpus-per-task=32
+#SBATCH --gres=gpu:h200:3
+#SBATCH --cpus-per-task=24
 #SBATCH --mem=256GB
 #SBATCH --time=08:00:00
 #SBATCH --job-name=train-yap
