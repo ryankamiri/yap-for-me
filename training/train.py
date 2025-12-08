@@ -2,6 +2,7 @@ import argparse
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -17,13 +18,15 @@ checkpoint_requested = False
 
 
 def signal_handler(signum, frame):
-    """Handle SIGUSR1 signal from SLURM before timeout."""
+    """Handle SIGTERM signal from SLURM before timeout."""
     global checkpoint_requested
-    print("\nReceived SIGUSR1 - will save checkpoint and exit gracefully...")
+    print("\nReceived SIGTERM - will save checkpoint and exit gracefully...", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
     checkpoint_requested = True
 
 
-signal.signal(signal.SIGUSR1, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 
 def format_bytes(bytes_val):
@@ -220,12 +223,13 @@ def main():
     )
     
     batch_size = config.get("training.batch_size")
-    gradient_accumulation_steps = config.get("training.gradient_accumulation_steps", 1)
+    gradient_accumulation_steps = config.get("training.gradient_accumulation_steps")
     num_epochs = config.get("training.epochs")
     learning_rate = float(config.get("training.learning_rate"))
     eval_steps = config.get("training.eval_steps")
     save_steps = config.get("training.save_steps")
-    dataloader_workers = config.get("training.dataloader_workers", 4)
+    dataloader_workers = config.get("training.dataloader_workers")
+    periodic_checkpoint_interval = config.get("training.periodic_checkpoint_interval")
     
     # Use SLURM job output directory: out/{job_id}/
     output_dir = f"out/{slurm_job_id}"
@@ -331,6 +335,8 @@ def main():
         wandb_run_id = wandb.run.id
         print(f"Started new wandb run: {wandb_run_id}")
     
+    last_checkpoint_time = time.time() if periodic_checkpoint_interval > 0 else None
+    
     for epoch in range(start_epoch, num_epochs):
         epoch_num = epoch + 1
         print()
@@ -420,6 +426,29 @@ def main():
                     print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}, GPU Memory: {format_bytes(allocated)}")
                 else:
                     print(f"Batch {batch_idx + 1}/{num_batches}, Loss: {loss.item() * gradient_accumulation_steps:.4f}")
+                
+                # Periodic checkpoint save as backup
+                # Signals can be blocked during CUDA operations, so this ensures we don't lose progress
+                if periodic_checkpoint_interval > 0 and last_checkpoint_time is not None:
+                    current_time = time.time()
+                    if current_time - last_checkpoint_time >= periodic_checkpoint_interval:
+                        print(f"\nPeriodic checkpoint save (every {periodic_checkpoint_interval // 60} minutes)...")
+                        save_checkpoint(
+                            model, tokenizer, optimizer, epoch_num, global_step, batch_idx + 1,
+                            best_val_loss, wandb_run_id, output_dir, "periodic-checkpoint"
+                        )
+                        last_checkpoint_time = current_time
+                        print("Periodic checkpoint saved.")
+                
+                if checkpoint_requested:
+                    print(f"\nSaving checkpoint before timeout at epoch {epoch_num}, step {global_step}, batch {batch_idx + 1}...")
+                    save_checkpoint(
+                        model, tokenizer, optimizer, epoch_num, global_step, batch_idx + 1,
+                        best_val_loss, wandb_run_id, output_dir, "timeout-checkpoint"
+                    )
+                    print("Checkpoint saved. Exiting gracefully.")
+                    wandb.finish()
+                    sys.exit(0)
             
             if global_step > 0 and global_step % eval_steps == 0:
                 val_loss = evaluate_model(model, val_loader, criterion, device)

@@ -26,3 +26,4 @@ training:
   save_steps: 1000
   gradient_checkpointing: true
   dataloader_workers: 4
+  periodic_checkpoint_interval: 1800  # Periodic checkpoint interval in seconds (0 to disable). 1800 = 30 minutes

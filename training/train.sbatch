@@ -8,7 +8,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --job-name=train-yap
 #SBATCH --output=out/%j/log.log
-#SBATCH --signal=USR1@60
+#SBATCH --signal=SIGTERM@60
 
 cd $SLURM_SUBMIT_DIR    # ensure we start where sbatch was called
 
