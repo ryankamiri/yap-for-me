@@ -80,12 +80,15 @@ def find_latest_checkpoint(job_id):
     return checkpoints[0][0]
 
 
-def load_checkpoint(checkpoint_dir, device):
+def load_checkpoint(checkpoint_dir, device, model_kwargs=None):
     """Load model and training state from checkpoint."""
     checkpoint_dir = Path(checkpoint_dir)
     
     print(f"Loading model from checkpoint: {checkpoint_dir}")
-    model = AutoModelForCausalLM.from_pretrained(checkpoint_dir)
+    if model_kwargs is None:
+        model = AutoModelForCausalLM.from_pretrained(checkpoint_dir)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(checkpoint_dir, **model_kwargs)
     model.to(device)
     
     state_path = checkpoint_dir / "training_state.pt"
@@ -268,7 +271,7 @@ def main():
         wandb_run_id = None
     else:
         model, start_epoch, global_step, resume_batch_idx, best_val_loss, wandb_run_id, optimizer_state = load_checkpoint(
-            resume_checkpoint, device
+            resume_checkpoint, device, model_kwargs
         )
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -277,6 +280,10 @@ def main():
         if optimizer_state is not None:
             optimizer.load_state_dict(optimizer_state)
             print("Loaded optimizer state from checkpoint")
+        
+        # Clear memory fragmentation after loading checkpoint
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         start_epoch = start_epoch - 1
     
@@ -336,6 +343,11 @@ def main():
         print(f"Started new wandb run: {wandb_run_id}")
     
     last_checkpoint_time = time.time() if periodic_checkpoint_interval > 0 else None
+    
+    # Clear memory before training starts (especially important when resuming)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        log_gpu_memory("Before training loop starts")
     
     for epoch in range(start_epoch, num_epochs):
         epoch_num = epoch + 1
