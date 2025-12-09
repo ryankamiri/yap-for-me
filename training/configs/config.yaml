@@ -27,3 +27,7 @@ training:
   gradient_checkpointing: true
   dataloader_workers: 4
   periodic_checkpoint_interval: 1800  # Periodic checkpoint interval in seconds (0 to disable). 1800 = 30 minutes
+
+wandb:
+  project: "yap-for-me"
+  entity: "ryanamiri05-northeastern-university"

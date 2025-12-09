@@ -252,6 +252,9 @@ def main():
     dataloader_workers = config.get("training.dataloader_workers")
     periodic_checkpoint_interval = config.get("training.periodic_checkpoint_interval")
     
+    wandb_project = config.get("wandb.project")
+    wandb_entity = config.get("wandb.entity")
+    
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -332,17 +335,58 @@ def main():
         print(f"Starting fresh - global_step: {global_step}")
     
     if wandb_run_id:
-        wandb.init(
-            project="yap-for-me",
-            id=wandb_run_id,
-            resume="must",
-        )
+        wandb_kwargs = {
+            "project": wandb_project,
+            "id": wandb_run_id,
+            "resume": "must",
+        }
+        if wandb_entity:
+            wandb_kwargs["entity"] = wandb_entity
+        wandb.init(**wandb_kwargs)
         print(f"Resumed wandb run: {wandb_run_id}")
+        
+        # Check if wandb has logged more steps than our checkpoint
+        try:
+            api = wandb.Api()
+            # Construct run path: entity/project/run_id (entity is optional)
+            # If entity not in config, try to get it from the resumed wandb run
+            entity = wandb_entity
+            if not entity and hasattr(wandb.run, 'entity'):
+                entity = wandb.run.entity
+            
+            if entity:
+                run_path = f"{entity}/{wandb_project}/{wandb_run_id}"
+            else:
+                # Fallback: try without entity (uses default from wandb login)
+                run_path = f"{wandb_project}/{wandb_run_id}"
+            run = api.run(run_path)
+            
+            # Get max step from history
+            max_logged_step = 0
+            try:
+                history = run.history()
+                if len(history) > 0 and '_step' in history.columns:
+                    max_logged_step = int(history['_step'].max())
+            except Exception as e:
+                # If we can't get history, that's okay - we'll just continue without the warning
+                pass
+            
+            if max_logged_step > global_step:
+                print(f"WARNING: Wandb run has logged up to step {max_logged_step}, but checkpoint is at step {global_step}.")
+                print(f"This means the checkpoint was saved before the crash, and wandb continued logging.")
+                print(f"Training will continue from step {global_step} (correct model state).")
+                print(f"Wandb logs will be rejected until step {max_logged_step + 1}, then resume normally.")
+                print(f"This is expected behavior - training is correct, only logging is affected.\n")
+            else:
+                print(f"Wandb max logged step: {max_logged_step}, Checkpoint step: {global_step} - in sync.")
+        except Exception as e:
+            print(f"Could not query wandb API to check step sync: {e}")
+            print("Continuing with checkpoint's global_step...")
     else:
-        wandb.init(
-            project="yap-for-me",
-            name=f"{model_name.split('/')[-1]}-{slurm_job_id}",
-            config={
+        wandb_kwargs = {
+            "project": wandb_project,
+            "name": f"{model_name.split('/')[-1]}-{slurm_job_id}",
+            "config": {
                 "model_name": model_name,
                 "max_length": max_length,
                 "batch_size": batch_size,
@@ -355,7 +399,10 @@ def main():
                 "random_seed": random_seed,
                 "slurm_job_id": slurm_job_id,
             }
-        )
+        }
+        if wandb_entity:
+            wandb_kwargs["entity"] = wandb_entity
+        wandb.init(**wandb_kwargs)
         wandb_run_id = wandb.run.id
         print(f"Started new wandb run: {wandb_run_id}")
     
