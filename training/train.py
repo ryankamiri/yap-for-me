@@ -146,6 +146,11 @@ def main():
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "no_job_id")
     print(f"SLURM Job ID: {slurm_job_id}")
     
+    # Create output directory immediately so errors are logged even if script fails early
+    output_dir = f"out/{slurm_job_id}"
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    print(f"Output directory created: {Path(output_dir).absolute()}")
+    
     resume_checkpoint = None
     if args.resume:
         resume_checkpoint = find_latest_checkpoint(args.resume)
@@ -233,10 +238,6 @@ def main():
     save_steps = config.get("training.save_steps")
     dataloader_workers = config.get("training.dataloader_workers")
     periodic_checkpoint_interval = config.get("training.periodic_checkpoint_interval")
-    
-    # Use SLURM job output directory: out/{job_id}/
-    output_dir = f"out/{slurm_job_id}"
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     train_loader = DataLoader(
         train_dataset,
