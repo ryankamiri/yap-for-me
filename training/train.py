@@ -89,7 +89,10 @@ def load_checkpoint(checkpoint_dir, device, model_kwargs=None):
         model = AutoModelForCausalLM.from_pretrained(checkpoint_dir)
     else:
         model = AutoModelForCausalLM.from_pretrained(checkpoint_dir, **model_kwargs)
+    
+    print("Model loaded, moving to device...")
     model.to(device)
+    print("Model moved to device successfully.")
     
     state_path = checkpoint_dir / "training_state.pt"
     state = torch.load(state_path, map_location='cpu', weights_only=False)
@@ -102,6 +105,7 @@ def load_checkpoint(checkpoint_dir, device, model_kwargs=None):
     optimizer_state = state.get('optimizer_state_dict', None)
     
     print(f"Resuming from epoch {resume_epoch}, step {resume_step}, batch {resume_batch_idx}")
+    print(f"Loaded global_step: {resume_step}")
     print(f"Best validation loss so far: {best_val_loss:.4f}")
     
     return model, resume_epoch, resume_step, resume_batch_idx, best_val_loss, wandb_run_id, optimizer_state
@@ -131,6 +135,10 @@ def save_checkpoint(model, tokenizer, optimizer, epoch, step, batch_idx, best_va
 def main():
     global checkpoint_requested
     
+    print("="*60)
+    print("Starting training script...")
+    print("="*60)
+    
     parser = argparse.ArgumentParser(description="Train YapForMe model")
     parser.add_argument(
         "--config", type=str, default="configs/config.yaml", help="Path to YAML configuration file"
@@ -141,7 +149,9 @@ def main():
     )
     args = parser.parse_args()
     
+    print(f"Loading config from: {args.config}")
     config = Config(args.config)
+    print("Config loaded successfully.")
     
     slurm_job_id = os.environ.get("SLURM_JOB_ID", "no_job_id")
     print(f"SLURM Job ID: {slurm_job_id}")
@@ -153,6 +163,7 @@ def main():
     
     resume_checkpoint = None
     if args.resume:
+        print(f"Looking for checkpoint in out/{args.resume}/...")
         resume_checkpoint = find_latest_checkpoint(args.resume)
         if resume_checkpoint is None:
             print(f"Error: No checkpoint found in out/{args.resume}/")
@@ -229,6 +240,8 @@ def main():
         random_seed=random_seed,
         padding_side=padding_side
     )
+    
+    print("Dataset loaded successfully.")
     
     batch_size = config.get("training.batch_size")
     gradient_accumulation_steps = config.get("training.gradient_accumulation_steps")
@@ -314,6 +327,9 @@ def main():
     if resume_checkpoint:
         print(f"Resuming from: {resume_checkpoint}")
         print(f"Starting at epoch {start_epoch + 1}, step {global_step}, batch {resume_batch_idx}")
+        print(f"Loaded global_step from checkpoint: {global_step}")
+    else:
+        print(f"Starting fresh - global_step: {global_step}")
     
     if wandb_run_id:
         wandb.init(
