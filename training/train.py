@@ -132,6 +132,21 @@ def save_checkpoint(model, tokenizer, optimizer, epoch, step, batch_idx, best_va
     print(f"Checkpoint saved: {checkpoint_dir}")
 
 
+def check_and_save_timeout_checkpoint(model, tokenizer, optimizer, epoch_num, global_step, batch_idx, best_val_loss, wandb_run_id, output_dir):
+    """Check if checkpoint was requested and save timeout checkpoint if so, then exit."""
+    global checkpoint_requested
+    
+    if checkpoint_requested:
+        print(f"\nSaving checkpoint before timeout at epoch {epoch_num}, step {global_step}, batch {batch_idx}...")
+        save_checkpoint(
+            model, tokenizer, optimizer, epoch_num, global_step, batch_idx,
+            best_val_loss, wandb_run_id, output_dir, "timeout-checkpoint"
+        )
+        print("Checkpoint saved. Exiting gracefully.")
+        wandb.finish()
+        sys.exit(0)
+
+
 def main():
     global checkpoint_requested
     
@@ -434,15 +449,10 @@ def main():
             if batch_idx < skip_batches:
                 continue
             
-            if checkpoint_requested:
-                print(f"\nSaving checkpoint before timeout at epoch {epoch_num}, step {global_step}, batch {batch_idx}...")
-                save_checkpoint(
-                    model, tokenizer, optimizer, epoch_num, global_step, batch_idx,
-                    best_val_loss, wandb_run_id, output_dir, "timeout-checkpoint"
-                )
-                print("Checkpoint saved. Exiting gracefully.")
-                wandb.finish()
-                sys.exit(0)
+            check_and_save_timeout_checkpoint(
+                model, tokenizer, optimizer, epoch_num, global_step, batch_idx,
+                best_val_loss, wandb_run_id, output_dir
+            )
             
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
@@ -453,6 +463,12 @@ def main():
             
             outputs = model(input_ids=input_ids, attention_mask=attention_mask)
             logits = outputs.logits # (B, L, V)
+            
+            # Check for checkpoint request after forward pass (CUDA operations can block signals)
+            check_and_save_timeout_checkpoint(
+                model, tokenizer, optimizer, epoch_num, global_step, batch_idx,
+                best_val_loss, wandb_run_id, output_dir
+            )
             
             # Shift for next-token prediction: align logits[i] with labels[i+1]
             # logits shape: [B, L, V] where B=batch, L=seq_len, V=vocab_size
@@ -476,12 +492,24 @@ def main():
             if batch_idx == skip_batches:
                 log_gpu_memory("After first backward pass")
             
+            # Check for checkpoint request after backward pass
+            check_and_save_timeout_checkpoint(
+                model, tokenizer, optimizer, epoch_num, global_step, batch_idx,
+                best_val_loss, wandb_run_id, output_dir
+            )
+            
             # Only step optimizer every gradient_accumulation_steps batches
             if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == num_batches:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 optimizer.zero_grad()
                 global_step += 1
+                
+                # Check for checkpoint request after optimizer step
+                check_and_save_timeout_checkpoint(
+                    model, tokenizer, optimizer, epoch_num, global_step, batch_idx + 1,
+                    best_val_loss, wandb_run_id, output_dir
+                )
                 
                 if batch_idx == skip_batches:
                     log_gpu_memory("After first optimizer step")
@@ -516,15 +544,10 @@ def main():
                         last_checkpoint_time = current_time
                         print("Periodic checkpoint saved.")
                 
-                if checkpoint_requested:
-                    print(f"\nSaving checkpoint before timeout at epoch {epoch_num}, step {global_step}, batch {batch_idx + 1}...")
-                    save_checkpoint(
-                        model, tokenizer, optimizer, epoch_num, global_step, batch_idx + 1,
-                        best_val_loss, wandb_run_id, output_dir, "timeout-checkpoint"
-                    )
-                    print("Checkpoint saved. Exiting gracefully.")
-                    wandb.finish()
-                    sys.exit(0)
+                check_and_save_timeout_checkpoint(
+                    model, tokenizer, optimizer, epoch_num, global_step, batch_idx + 1,
+                    best_val_loss, wandb_run_id, output_dir
+                )
             
             if global_step > 0 and global_step % eval_steps == 0:
                 val_loss = evaluate_model(model, val_loader, criterion, device)
