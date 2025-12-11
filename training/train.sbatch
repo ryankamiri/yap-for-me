@@ -21,11 +21,11 @@ conda activate yap
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Check if --resume argument was passed
+# Check if RESUME_JOB_ID environment variable was set (passed via sbatch --export)
 RESUME_ARG=""
-if [ "$1" == "--resume" ] && [ -n "$2" ]; then
-    RESUME_ARG="--resume $2"
-    echo "Resuming from job: $2"
+if [ -n "$RESUME_JOB_ID" ]; then
+    RESUME_ARG="--resume $RESUME_JOB_ID"
+    echo "Resuming from job: $RESUME_JOB_ID"
 fi
 
 python3 -u train.py \
